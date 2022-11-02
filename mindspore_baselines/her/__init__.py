@@ -1,0 +1,2 @@
+from mindspore_baselines.her.goal_selection_strategy import GoalSelectionStrategy
+from mindspore_baselines.her.her_replay_buffer import HerReplayBuffer
