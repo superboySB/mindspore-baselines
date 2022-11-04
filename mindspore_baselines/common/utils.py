@@ -4,17 +4,20 @@ import platform
 import random
 from collections import deque
 from itertools import zip_longest
+from numbers import Number
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import gym
 import numpy as np
-import torch as th
+
+import mindspore as ms
+from mindspore import ops, nn
 
 import mindspore_baselines as sb3
 
 # Check if tensorboard is available for pytorch
 try:
-    from torch.utils.tensorboard import SummaryWriter
+    from tensorboardX import SummaryWriter
 except ImportError:
     SummaryWriter = None
 
@@ -22,7 +25,7 @@ from mindspore_baselines.common.logger import Logger, configure
 from mindspore_baselines.common.type_aliases import GymEnv, Schedule, TensorDict, TrainFreq, TrainFrequencyUnit
 
 
-def set_random_seed(seed: int, using_cuda: bool = False) -> None:
+def set_random_seed(seed: int) -> None:
     """
     Seed the different random generators.
 
@@ -34,12 +37,7 @@ def set_random_seed(seed: int, using_cuda: bool = False) -> None:
     # Seed numpy RNG
     np.random.seed(seed)
     # seed the RNG for all devices (both CPU and CUDA)
-    th.manual_seed(seed)
-
-    if using_cuda:
-        # Deterministic operations for CuDNN, it may impact performances
-        th.backends.cudnn.deterministic = True
-        th.backends.cudnn.benchmark = False
+    ms.set_seed(seed)
 
 
 # From stable baselines
@@ -62,7 +60,7 @@ def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> np.ndarray:
     return np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
 
-def update_learning_rate(optimizer: th.optim.Optimizer, learning_rate: float) -> None:
+def update_learning_rate(optimizer: nn.Optimizer, learning_rate: float) -> None:
     """
     Update the learning rate for a given optimizer.
     Useful when doing linear schedule.
@@ -131,29 +129,6 @@ def constant_fn(val: float) -> Schedule:
     return func
 
 
-def get_device(device: Union[th.device, str] = "auto") -> th.device:
-    """
-    Retrieve PyTorch device.
-    It checks that the requested device is available first.
-    For now, it supports only cpu and cuda.
-    By default, it tries to use the gpu.
-
-    :param device: One for 'auto', 'cuda', 'cpu'
-    :return: Supported Pytorch device
-    """
-    # Cuda by default
-    if device == "auto":
-        device = "cuda"
-    # Force conversion to th.device
-    device = th.device(device)
-
-    # Cuda not available
-    if device.type == th.device("cuda").type and not th.cuda.is_available():
-        return th.device("cpu")
-
-    return device
-
-
 def get_latest_run_id(log_path: str = "", log_name: str = "") -> int:
     """
     Returns the latest run number for the given log name and log path,
@@ -174,10 +149,10 @@ def get_latest_run_id(log_path: str = "", log_name: str = "") -> int:
 
 
 def configure_logger(
-    verbose: int = 0,
-    tensorboard_log: Optional[str] = None,
-    tb_log_name: str = "",
-    reset_num_timesteps: bool = True,
+        verbose: int = 0,
+        tensorboard_log: Optional[str] = None,
+        tb_log_name: str = "",
+        reset_num_timesteps: bool = True,
 ) -> Logger:
     """
     Configure the logger's outputs.
@@ -249,7 +224,8 @@ def is_vectorized_box_observation(observation: np.ndarray, observation_space: gy
         )
 
 
-def is_vectorized_discrete_observation(observation: Union[int, np.ndarray], observation_space: gym.spaces.Discrete) -> bool:
+def is_vectorized_discrete_observation(observation: Union[int, np.ndarray],
+                                       observation_space: gym.spaces.Discrete) -> bool:
     """
     For discrete observation type, detects and validates the shape,
     then returns whether or not the observation is vectorized.
@@ -269,7 +245,8 @@ def is_vectorized_discrete_observation(observation: Union[int, np.ndarray], obse
         )
 
 
-def is_vectorized_multidiscrete_observation(observation: np.ndarray, observation_space: gym.spaces.MultiDiscrete) -> bool:
+def is_vectorized_multidiscrete_observation(observation: np.ndarray,
+                                            observation_space: gym.spaces.MultiDiscrete) -> bool:
     """
     For multidiscrete observation type, detects and validates the shape,
     then returns whether or not the observation is vectorized.
@@ -378,7 +355,8 @@ def is_vectorized_observation(observation: Union[int, np.ndarray], observation_s
             return is_vec_obs_func(observation, observation_space)
     else:
         # for-else happens if no break is called
-        raise ValueError(f"Error: Cannot determine if the observation is vectorized with the space type {observation_space}.")
+        raise ValueError(
+            f"Error: Cannot determine if the observation is vectorized with the space type {observation_space}.")
 
 
 def safe_mean(arr: Union[np.ndarray, list, deque]) -> np.ndarray:
@@ -392,7 +370,7 @@ def safe_mean(arr: Union[np.ndarray, list, deque]) -> np.ndarray:
     return np.nan if len(arr) == 0 else np.mean(arr)
 
 
-def get_parameters_by_name(model: th.nn.Module, included_names: Iterable[str]) -> List[th.Tensor]:
+def get_parameters_by_name(model: nn.Cell, included_names: Iterable[str]) -> List[ms.Tensor]:
     """
     Extract parameters from the state dict of ``model``
     if the name contains one of the strings in ``included_names``.
@@ -424,9 +402,9 @@ def zip_strict(*iterables: Iterable) -> Iterable:
 
 
 def polyak_update(
-    params: Iterable[th.Tensor],
-    target_params: Iterable[th.Tensor],
-    tau: float,
+        params: Iterable[ms.Tensor],
+        target_params: Iterable[ms.Tensor],
+        tau: float,
 ) -> None:
     """
     Perform a Polyak average update on ``target_params`` using ``params``:
@@ -443,35 +421,32 @@ def polyak_update(
     :param target_params: parameters to update
     :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
     """
-    with th.no_grad():
-        # zip does not raise an exception if length of parameters does not match.
-        for param, target_param in zip_strict(params, target_params):
-            target_param.data.mul_(1 - tau)
-            th.add(target_param.data, param.data, alpha=tau, out=target_param.data)
+    # zip does not raise an exception if length of parameters does not match.
+    for param, target_param in zip_strict(params, target_params):
+        target_param = (1 - tau) * target_param + tau * param
 
 
 def obs_as_tensor(
-    obs: Union[np.ndarray, Dict[Union[str, int], np.ndarray]], device: th.device
-) -> Union[th.Tensor, TensorDict]:
+        obs: Union[np.ndarray, Dict[Union[str, int], np.ndarray]]
+) -> Union[ms.Tensor, TensorDict]:
     """
     Moves the observation to the given device.
 
     :param obs:
-    :param device: PyTorch device
     :return: PyTorch tensor of the observation on a desired device.
     """
     if isinstance(obs, np.ndarray):
-        return th.as_tensor(obs).to(device)
+        return ms.Tensor(obs)
     elif isinstance(obs, dict):
-        return {key: th.as_tensor(_obs).to(device) for (key, _obs) in obs.items()}
+        return {key: ms.Tensor(_obs) for (key, _obs) in obs.items()}
     else:
         raise Exception(f"Unrecognized type of observation {type(obs)}")
 
 
 def should_collect_more_steps(
-    train_freq: TrainFreq,
-    num_collected_steps: int,
-    num_collected_episodes: int,
+        train_freq: TrainFreq,
+        num_collected_steps: int,
+        num_collected_episodes: int,
 ) -> bool:
     """
     Helper used in ``collect_rollouts()`` of off-policy algorithms
@@ -508,8 +483,8 @@ def get_system_info(print_info: bool = True) -> Tuple[Dict[str, str], str]:
         "OS": f"{platform.platform()} {platform.version()}",
         "Python": platform.python_version(),
         "Stable-Baselines3": sb3.__version__,
-        "PyTorch": th.__version__,
-        "GPU Enabled": str(th.cuda.is_available()),
+        "MindSpore": ms.__version__,
+        "GPU Enabled": str(os.environ.get("CUDA_VISIBLE_DEVICES")),
         "Numpy": np.__version__,
         "Gym": gym.__version__,
     }
@@ -519,3 +494,14 @@ def get_system_info(print_info: bool = True) -> Tuple[Dict[str, str], str]:
     if print_info:
         print(env_info_str)
     return env_info, env_info_str
+
+
+def torch_allclose(input: ms.Tensor, other: ms.Tensor, rtol: float = 1e-05, atol: float = 1e-08,
+                   equal_nan: bool = False) -> bool:
+    if equal_nan and ops.isnan(input) and ops.isnan(other):
+        return True
+
+    if ops.abs(input - other) - atol - rtol * ops.abs(other) <= 0:
+        return True
+    else:
+        return False

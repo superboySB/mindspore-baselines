@@ -1,13 +1,16 @@
 import gym
 import numpy as np
 import pytest
+
 import torch as th
+import mindspore as ms
+from mindspore import ops
 from gym import spaces
 
 from mindspore_baselines.common.buffers import DictReplayBuffer, DictRolloutBuffer, ReplayBuffer, RolloutBuffer
 from mindspore_baselines.common.env_util import make_vec_env
 from mindspore_baselines.common.type_aliases import DictReplayBufferSamples, ReplayBufferSamples
-from mindspore_baselines.common.utils import get_device
+from mindspore_baselines.common.utils import get_device, torch_allclose
 from mindspore_baselines.common.vec_env import VecNormalize
 
 
@@ -90,9 +93,9 @@ def test_replay_buffer_normalization(replay_buffer_cls):
     for observations in [sample.observations, sample.next_observations]:
         if isinstance(sample, DictReplayBufferSamples):
             for key in observations.keys():
-                assert th.allclose(observations[key].mean(0), th.zeros(1), atol=1)
+                assert torch_allclose(observations[key].mean(0), ms.numpy.zeros(1), atol=1)
         elif isinstance(sample, ReplayBufferSamples):
-            assert th.allclose(observations.mean(0), th.zeros(1), atol=1)
+            assert torch_allclose(observations.mean(0), ms.numpy.zeros(1), atol=1)
     # Test reward normalization
     assert np.allclose(sample.rewards.mean(0), np.zeros(1), atol=1)
 

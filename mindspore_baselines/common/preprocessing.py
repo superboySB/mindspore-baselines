@@ -2,9 +2,9 @@ import warnings
 from typing import Dict, Tuple, Union
 
 import numpy as np
-import torch as th
+import mindspore as ms
+from mindspore import ops, nn
 from gym import spaces
-from torch.nn import functional as F
 
 
 def is_image_space_channels_first(observation_space: spaces.Box) -> bool:
@@ -25,8 +25,8 @@ def is_image_space_channels_first(observation_space: spaces.Box) -> bool:
 
 
 def is_image_space(
-    observation_space: spaces.Space,
-    check_channels: bool = False,
+        observation_space: spaces.Space,
+        check_channels: bool = False,
 ) -> bool:
     """
     Check if a observation space has the shape, limits and dtype
@@ -83,10 +83,10 @@ def maybe_transpose(observation: np.ndarray, observation_space: spaces.Space) ->
 
 
 def preprocess_obs(
-    obs: th.Tensor,
-    observation_space: spaces.Space,
-    normalize_images: bool = True,
-) -> Union[th.Tensor, Dict[str, th.Tensor]]:
+        obs: ms.Tensor,
+        observation_space: spaces.Space,
+        normalize_images: bool = True,
+) -> Union[ms.Tensor, Dict[str, ms.Tensor]]:
     """
     Preprocess observation to be to a neural network.
     For images, it normalizes the values by dividing them by 255 (to have values in [0, 1])
@@ -100,25 +100,26 @@ def preprocess_obs(
     """
     if isinstance(observation_space, spaces.Box):
         if is_image_space(observation_space) and normalize_images:
-            return obs.float() / 255.0
-        return obs.float()
+            return obs.astype("float32") / 255.0
+        return obs.astype("float32")
 
     elif isinstance(observation_space, spaces.Discrete):
         # One hot encoding and convert to float to avoid errors
-        return F.one_hot(obs.long(), num_classes=observation_space.n).float()
+        return ops.one_hot(indices=obs.astype("int32"), depth=observation_space.n, on_value=ms.Tensor(1.0, ms.float32),
+                           off_value=ms.Tensor(0.0, ms.float32)).astype("float32")
 
     elif isinstance(observation_space, spaces.MultiDiscrete):
         # Tensor concatenation of one hot encodings of each Categorical sub-space
-        return th.cat(
+        return ops.concat(
             [
-                F.one_hot(obs_.long(), num_classes=int(observation_space.nvec[idx])).float()
-                for idx, obs_ in enumerate(th.split(obs.long(), 1, dim=1))
+                ops.one_hot(obs_.astype("int32"), num_classes=int(observation_space.nvec[idx])).astype("float32")
+                for idx, obs_ in enumerate(ops.split(obs.astype("int32"), output_num=1, axis=1))
             ],
-            dim=-1,
+            axis=-1,
         ).view(obs.shape[0], sum(observation_space.nvec))
 
     elif isinstance(observation_space, spaces.MultiBinary):
-        return obs.float()
+        return obs.astype("float32")
 
     elif isinstance(observation_space, spaces.Dict):
         # Do not modify by reference the original observation
@@ -132,7 +133,7 @@ def preprocess_obs(
 
 
 def get_obs_shape(
-    observation_space: spaces.Space,
+        observation_space: spaces.Space,
 ) -> Union[Tuple[int, ...], Dict[str, Tuple[int, ...]]]:
     """
     Get the shape of the observation (useful for the buffers).

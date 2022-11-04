@@ -14,11 +14,13 @@ import zipfile
 from typing import Any, Dict, Optional, Tuple, Union
 
 import cloudpickle
-import torch as th
+
+import mindspore as ms
+from mindspore import ops,nn
 
 import mindspore_baselines as sb3
 from mindspore_baselines.common.type_aliases import TensorDict
-from mindspore_baselines.common.utils import get_device, get_system_info
+from mindspore_baselines.common.utils import get_system_info
 
 
 def recursive_getattr(obj: Any, attr: str, *args) -> Any:
@@ -290,7 +292,7 @@ def save_to_zip_file(
     save_path: Union[str, pathlib.Path, io.BufferedIOBase],
     data: Optional[Dict[str, Any]] = None,
     params: Optional[Dict[str, Any]] = None,
-    pytorch_variables: Optional[Dict[str, Any]] = None,
+    mindspore_variables: Optional[Dict[str, Any]] = None,
     verbose: int = 0,
 ) -> None:
     """
@@ -298,10 +300,10 @@ def save_to_zip_file(
 
     :param save_path: Where to store the model.
         if save_path is a str or pathlib.Path ensures that the path actually exists.
-    :param data: Class parameters being stored (non-PyTorch variables)
+    :param data: Class parameters being stored (non-MindSpore variables)
     :param params: Model parameters being stored expected to contain an entry for every
                    state_dict with its name and the state_dict.
-    :param pytorch_variables: Other PyTorch variables expected to contain name and value of the variable.
+    :param mindspore_variables: Other MindSpore variables expected to contain name and value of the variable.
     :param verbose: Verbosity level: 0 for no output, 1 for info messages, 2 for debug messages
     """
     save_path = open_path(save_path, "w", verbose=0, suffix="zip")
@@ -310,18 +312,18 @@ def save_to_zip_file(
     if data is not None:
         serialized_data = data_to_json(data)
 
-    # Create a zip-archive and write our objects there.
+    # Create a zip-archive and write our objects there. TODO: meet issues about torch.save vs ms.save_xxx
     with zipfile.ZipFile(save_path, mode="w") as archive:
         # Do not try to save "None" elements
         if data is not None:
             archive.writestr("data", serialized_data)
-        if pytorch_variables is not None:
-            with archive.open("pytorch_variables.pth", mode="w", force_zip64=True) as pytorch_variables_file:
-                th.save(pytorch_variables, pytorch_variables_file)
+        if mindspore_variables is not None:
+            with archive.open("mindspore_variables.ckpt", mode="w", force_zip64=True):
+                ms.save_checkpoint(mindspore_variables, "mindspore_variables.ckpt")
         if params is not None:
             for file_name, dict_ in params.items():
-                with archive.open(file_name + ".pth", mode="w", force_zip64=True) as param_file:
-                    th.save(dict_, param_file)
+                with archive.open(file_name + ".ckpt", mode="w", force_zip64=True):
+                    ms.save_checkpoint(dict_, file_name + ".ckpt")
         # Save metadata: library version when file was saved
         archive.writestr("_stable_baselines3_version", sb3.__version__)
         # Save system info about the current python env
@@ -364,7 +366,6 @@ def load_from_zip_file(
     load_path: Union[str, pathlib.Path, io.BufferedIOBase],
     load_data: bool = True,
     custom_objects: Optional[Dict[str, Any]] = None,
-    device: Union[th.device, str] = "auto",
     verbose: int = 0,
     print_system_info: bool = False,
 ) -> (Tuple[Optional[Dict[str, Any]], Optional[TensorDict], Optional[TensorDict]]):
@@ -385,12 +386,9 @@ def load_from_zip_file(
     :param print_system_info: Whether to print or not the system info
         about the saved model.
     :return: Class parameters, model state_dicts (aka "params", dict of state_dict)
-        and dict of pytorch variables
+        and dict of mindspore variables
     """
     load_path = open_path(load_path, "r", verbose=verbose, suffix="zip")
-
-    # set device to cpu if cuda is not available
-    device = get_device(device=device)
 
     # Open the zip archive and load data
     try:
@@ -400,7 +398,7 @@ def load_from_zip_file(
             # zip archive, assume they were stored
             # as None (_save_to_file_zip allows this).
             data = None
-            pytorch_variables = None
+            mindspore_variables = None
             params = {}
 
             # Debug system info first
@@ -416,12 +414,12 @@ def load_from_zip_file(
 
             if "data" in namelist and load_data:
                 # Load class parameters that are stored
-                # with either JSON or pickle (not PyTorch variables).
+                # with either JSON or pickle (not MindSPore variables).
                 json_data = archive.read("data").decode()
                 data = json_to_data(json_data, custom_objects=custom_objects)
 
             # Check for all .pth files and load them using th.load.
-            # "pytorch_variables.pth" stores PyTorch variables, and any other .pth
+            # "mindspore_variables.pth" stores MindSPore variables, and any other .pth
             # files store state_dicts of variables with custom names (e.g. policy, policy.optimizer)
             pth_files = [file_name for file_name in namelist if os.path.splitext(file_name)[1] == ".pth"]
             for file_path in pth_files:
@@ -434,11 +432,11 @@ def load_from_zip_file(
                     file_content.seek(0)
                     # Load the parameters with the right ``map_location``.
                     # Remove ".pth" ending with splitext
-                    th_object = th.load(file_content, map_location=device)
-                    # "tensors.pth" was renamed "pytorch_variables.pth" in v0.9.0, see PR #138
-                    if file_path == "pytorch_variables.pth" or file_path == "tensors.pth":
-                        # PyTorch variables (not state_dicts)
-                        pytorch_variables = th_object
+                    th_object = ms.load_checkpoint(file_content)  # TODO: meet issues about torch.load vs ms.load_xxx
+                    # "tensors.pth" was renamed "mindspore_variables.pth" in v0.9.0, see PR #138
+                    if file_path == "mindspore_variables.ckpt" or file_path == "tensors.pth":
+                        # MindSpore variables (not state_dicts)
+                        mindspore_variables = th_object
                     else:
                         # State dicts. Store into params dictionary
                         # with same name as in .zip file (without .pth)
@@ -446,4 +444,4 @@ def load_from_zip_file(
     except zipfile.BadZipFile as e:
         # load_path wasn't a zip file
         raise ValueError(f"Error: the file {load_path} wasn't a zip-file") from e
-    return data, params, pytorch_variables
+    return data, params, mindspore_variables

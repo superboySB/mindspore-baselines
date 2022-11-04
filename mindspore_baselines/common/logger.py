@@ -9,12 +9,13 @@ from typing import Any, Dict, List, Optional, Sequence, TextIO, Tuple, Union
 
 import numpy as np
 import pandas
-import torch as th
+import mindspore as ms
+from mindspore import ops,nn
 from matplotlib import pyplot as plt
 
 try:
-    from torch.utils.tensorboard import SummaryWriter
-    from torch.utils.tensorboard.summary import hparams
+    from tensorboardX import SummaryWriter
+    from tensorboardX import hparams
 except ImportError:
     SummaryWriter = None
 
@@ -38,7 +39,7 @@ class Video:
     :param fps: frames per second
     """
 
-    def __init__(self, frames: th.Tensor, fps: Union[float, int]):
+    def __init__(self, frames: ms.Tensor, fps: Union[float, int]):
         self.frames = frames
         self.fps = fps
 
@@ -66,7 +67,7 @@ class Image:
         Gym envs normally use 'HWC' (channel last)
     """
 
-    def __init__(self, image: Union[th.Tensor, np.ndarray, str], dataformats: str):
+    def __init__(self, image: Union[ms.Tensor, np.ndarray, str], dataformats: str):
         self.image = image
         self.dataformats = dataformats
 
@@ -412,7 +413,7 @@ class TensorBoardOutputFormat(KVWriter):
                 else:
                     self.writer.add_scalar(key, value, step)
 
-            if isinstance(value, th.Tensor):
+            if isinstance(value, ms.Tensor):
                 self.writer.add_histogram(key, value, step)
 
             if isinstance(value, Video):

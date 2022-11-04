@@ -2,14 +2,15 @@
 
 import collections
 import copy
+import pickle
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import gym
 import numpy as np
-import torch as th
-from torch import nn
+import mindspore as ms
+from mindspore import ops,nn
 
 from mindspore_baselines.common.distributions import (
     BernoulliDistribution,
@@ -30,12 +31,12 @@ from mindspore_baselines.common.torch_layers import (
     create_mlp,
 )
 from mindspore_baselines.common.type_aliases import Schedule
-from mindspore_baselines.common.utils import get_device, is_vectorized_observation, obs_as_tensor
+from mindspore_baselines.common.utils import is_vectorized_observation, obs_as_tensor
 
 BaseModelSelf = TypeVar("BaseModelSelf", bound="BaseModel")
 
 
-class BaseModel(nn.Module):
+class BaseModel(nn.Cell):
     """
     The base model object: makes predictions in response to observations.
 
@@ -63,9 +64,9 @@ class BaseModel(nn.Module):
         action_space: gym.spaces.Space,
         features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        features_extractor: Optional[nn.Module] = None,
+        features_extractor: Optional[nn.Cell] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class: Type[nn.Optimizer] = nn.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
@@ -83,7 +84,7 @@ class BaseModel(nn.Module):
 
         self.optimizer_class = optimizer_class
         self.optimizer_kwargs = optimizer_kwargs
-        self.optimizer = None  # type: Optional[th.optim.Optimizer]
+        self.optimizer = None  # type: Optional[nn.Optimizer]
 
         self.features_extractor_class = features_extractor_class
         self.features_extractor_kwargs = features_extractor_kwargs
@@ -111,10 +112,10 @@ class BaseModel(nn.Module):
         return net_kwargs
 
     def make_features_extractor(self) -> BaseFeaturesExtractor:
-        """Helper method to create a features extractor."""
+        """Helper method to create a feature extractor."""
         return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
 
-    def extract_features(self, obs: th.Tensor) -> th.Tensor:
+    def extract_features(self, obs: ms.Tensor) -> ms.Tensor:
         """
         Preprocess the observation if needed and extract features.
 
@@ -140,15 +141,6 @@ class BaseModel(nn.Module):
             normalize_images=self.normalize_images,
         )
 
-    @property
-    def device(self) -> th.device:
-        """Infer which device this policy lives on by inspecting its parameters.
-        If it has no parameters, the 'cpu' device is used as a fallback.
-
-        :return:"""
-        for param in self.parameters():
-            return param.device
-        return get_device("cpu")
 
     def save(self, path: str) -> None:
         """
@@ -156,25 +148,24 @@ class BaseModel(nn.Module):
 
         :param path:
         """
-        th.save({"state_dict": self.state_dict(), "data": self._get_constructor_parameters()}, path)
+        with open(path, 'wb') as f:
+            pickle.dump({"state_dict": self.parameters_dict(), "data": self._get_constructor_parameters()}, f, 2)
 
     @classmethod
-    def load(cls: Type[BaseModelSelf], path: str, device: Union[th.device, str] = "auto") -> BaseModelSelf:
+    def load(cls: Type[BaseModelSelf], path: str) -> BaseModelSelf:
         """
         Load model from path.
 
         :param path:
-        :param device: Device on which the policy should be loaded.
         :return:
         """
-        device = get_device(device)
-        saved_variables = th.load(path, map_location=device)
+        with open(path, 'rb') as f:
+            saved_variables = pickle.load(f)
 
         # Create policy object
         model = cls(**saved_variables["data"])  # pytype: disable=not-instantiable
         # Load weights
-        model.load_state_dict(saved_variables["state_dict"])
-        model.to(device)
+        ms.load_param_into_net(model, saved_variables["state_dict"])
         return model
 
     def load_from_vector(self, vector: np.ndarray) -> None:
@@ -183,7 +174,21 @@ class BaseModel(nn.Module):
 
         :param vector:
         """
-        th.nn.utils.vector_to_parameters(th.FloatTensor(vector).to(self.device), self.parameters())
+        vec = ms.Tensor(vector, dtype=ms.float32)
+
+        # Pointer for slicing the vector for each parameter
+        pointer = 0
+        for param in self.get_parameters():
+            # The length of the parameter
+            num_param = ops.size(param)
+            # Slice the vector, reshape it, and replace the old data of the parameter
+            param.set_data(vec[pointer:pointer + num_param].view(param.shape))
+
+            # Increment the pointer
+            pointer += num_param
+
+
+
 
     def parameters_to_vector(self) -> np.ndarray:
         """
@@ -191,7 +196,13 @@ class BaseModel(nn.Module):
 
         :return:
         """
-        return th.nn.utils.parameters_to_vector(self.parameters()).detach().cpu().numpy()
+
+        vec = []
+        for param in self.get_parameters():
+            vec.append(param.view(-1))
+        vec = ops.concat(vec)
+        return vec.asnumpy()
+
 
     def set_training_mode(self, mode: bool) -> None:
         """
@@ -201,9 +212,9 @@ class BaseModel(nn.Module):
 
         :param mode: if true, set to training mode, else set to evaluation mode
         """
-        self.train(mode)
+        self.set_train(mode)
 
-    def obs_to_tensor(self, observation: Union[np.ndarray, Dict[str, np.ndarray]]) -> Tuple[th.Tensor, bool]:
+    def obs_to_tensor(self, observation: Union[np.ndarray, Dict[str, np.ndarray]]) -> Tuple[ms.Tensor, bool]:
         """
         Convert an input observation to a PyTorch tensor that can be fed to a model.
         Includes sugar-coating to handle different observations (e.g. normalizing images).
@@ -240,7 +251,7 @@ class BaseModel(nn.Module):
             # Add batch dimension if needed
             observation = observation.reshape((-1,) + self.observation_space.shape)
 
-        observation = obs_as_tensor(observation, self.device)
+        observation = obs_as_tensor(observation)
         return observation, vectorized_env
 
 
@@ -271,17 +282,18 @@ class BasePolicy(BaseModel, ABC):
         return self._squash_output
 
     @staticmethod
-    def init_weights(module: nn.Module, gain: float = 1) -> None:
+    def init_weights(module: nn.Cell, gain: float = 1) -> None:
         """
         Orthogonal initialization (used in PPO and A2C)
         """
-        if isinstance(module, (nn.Linear, nn.Conv2d)):
-            nn.init.orthogonal_(module.weight, gain=gain)
+        from mindspore.common.initializer import Zero, Orthogonal
+        if isinstance(module, (nn.Dense, nn.Conv2d)):
+            module.weight.set_data(Orthogonal(gain))
             if module.bias is not None:
-                module.bias.data.fill_(0.0)
+                module.bias.set_data(Zero())
 
     @abstractmethod
-    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, observation: ms.Tensor, deterministic: bool = False) -> ms.Tensor:
         """
         Get the action according to the policy for a given observation.
 
@@ -307,7 +319,7 @@ class BasePolicy(BaseModel, ABC):
         :param observation: the input observation
         :param state: The last hidden states (can be None, used in recurrent policies)
         :param episode_start: The last masks (can be None, used in recurrent policies)
-            this correspond to beginning of episodes,
+            this corresponds to beginning of episodes,
             where the hidden states of the RNN must be reset.
         :param deterministic: Whether or not to return deterministic actions.
         :return: the model's action and the next hidden state
@@ -323,10 +335,9 @@ class BasePolicy(BaseModel, ABC):
 
         observation, vectorized_env = self.obs_to_tensor(observation)
 
-        with th.no_grad():
-            actions = self._predict(observation, deterministic=deterministic)
+        actions = ops.stop_gradient(self._predict(observation, deterministic=deterministic))
         # Convert to numpy, and reshape to the original action shape
-        actions = actions.cpu().numpy().reshape((-1,) + self.action_space.shape)
+        actions = actions.asnumpy().reshape((-1,) + self.action_space.shape)
 
         if isinstance(self.action_space, gym.spaces.Box):
             if self.squash_output:
@@ -402,7 +413,7 @@ class ActorCriticPolicy(BasePolicy):
         action_space: gym.spaces.Space,
         lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Module] = nn.Tanh,
+        activation_fn: Type[nn.Cell] = nn.Tanh,
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -412,14 +423,14 @@ class ActorCriticPolicy(BasePolicy):
         features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class: Type[nn.Optimizer] = nn.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
 
         if optimizer_kwargs is None:
             optimizer_kwargs = {}
             # Small values to avoid NaN in Adam optimizer
-            if optimizer_class == th.optim.Adam:
+            if optimizer_class == nn.Adam:
                 optimizer_kwargs["eps"] = 1e-5
 
         super().__init__(
@@ -511,7 +522,6 @@ class ActorCriticPolicy(BasePolicy):
             self.features_dim,
             net_arch=self.net_arch,
             activation_fn=self.activation_fn,
-            device=self.device,
         )
 
     def _build(self, lr_schedule: Schedule) -> None:
@@ -538,7 +548,7 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
+        self.value_net = nn.Dense(self.mlp_extractor.latent_dim_vf, 1)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:
@@ -558,7 +568,7 @@ class ActorCriticPolicy(BasePolicy):
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
 
-    def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def construct(self, obs: ms.Tensor, deterministic: bool = False) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor]:
         """
         Forward pass in all the networks (actor and critic)
 
@@ -577,7 +587,7 @@ class ActorCriticPolicy(BasePolicy):
         actions = actions.reshape((-1,) + self.action_space.shape)
         return actions, values, log_prob
 
-    def _get_action_dist_from_latent(self, latent_pi: th.Tensor) -> Distribution:
+    def _get_action_dist_from_latent(self, latent_pi: ms.Tensor) -> Distribution:
         """
         Retrieve action distribution given the latent codes.
 
@@ -602,7 +612,7 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise ValueError("Invalid action distribution")
 
-    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, observation: ms.Tensor, deterministic: bool = False) -> ms.Tensor:
         """
         Get the action according to the policy for a given observation.
 
@@ -612,7 +622,7 @@ class ActorCriticPolicy(BasePolicy):
         """
         return self.get_distribution(observation).get_actions(deterministic=deterministic)
 
-    def evaluate_actions(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
+    def evaluate_actions(self, obs: ms.Tensor, actions: ms.Tensor) -> Tuple[ms.Tensor, ms.Tensor, Optional[ms.Tensor]]:
         """
         Evaluate actions according to the current policy,
         given the observations.
@@ -631,7 +641,7 @@ class ActorCriticPolicy(BasePolicy):
         entropy = distribution.entropy()
         return values, log_prob, entropy
 
-    def get_distribution(self, obs: th.Tensor) -> Distribution:
+    def get_distribution(self, obs: ms.Tensor) -> Distribution:
         """
         Get the current policy distribution given the observations.
 
@@ -642,7 +652,7 @@ class ActorCriticPolicy(BasePolicy):
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent_pi)
 
-    def predict_values(self, obs: th.Tensor) -> th.Tensor:
+    def predict_values(self, obs: ms.Tensor) -> ms.Tensor:
         """
         Get the estimated values according to the current policy given the observations.
 
@@ -691,7 +701,7 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         action_space: gym.spaces.Space,
         lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Module] = nn.Tanh,
+        activation_fn: Type[nn.Cell] = nn.Tanh,
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -701,7 +711,7 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         features_extractor_class: Type[BaseFeaturesExtractor] = NatureCNN,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class: Type[nn.Optimizer] = nn.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
@@ -761,7 +771,7 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
         action_space: gym.spaces.Space,
         lr_schedule: Schedule,
         net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Module] = nn.Tanh,
+        activation_fn: Type[nn.Cell] = nn.Tanh,
         ortho_init: bool = True,
         use_sde: bool = False,
         log_std_init: float = 0.0,
@@ -771,7 +781,7 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
         features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class: Type[nn.Optimizer] = nn.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
@@ -826,9 +836,9 @@ class ContinuousCritic(BaseModel):
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Space,
         net_arch: List[int],
-        features_extractor: nn.Module,
+        features_extractor: nn.Cell,
         features_dim: int,
-        activation_fn: Type[nn.Module] = nn.ReLU,
+        activation_fn: Type[nn.Cell] = nn.ReLU,
         normalize_images: bool = True,
         n_critics: int = 2,
         share_features_extractor: bool = True,
@@ -847,24 +857,25 @@ class ContinuousCritic(BaseModel):
         self.q_networks = []
         for idx in range(n_critics):
             q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn)
-            q_net = nn.Sequential(*q_net)
+            q_net = nn.SequentialCell(*q_net)
             self.add_module(f"qf{idx}", q_net)
             self.q_networks.append(q_net)
 
-    def forward(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, ...]:
+    def construct(self, obs: ms.Tensor, actions: ms.Tensor) -> Tuple[ms.Tensor, ...]:
         # Learn the features extractor using the policy loss only
         # when the features_extractor is shared with the actor
-        with th.set_grad_enabled(not self.share_features_extractor):
+        if self.share_features_extractor:
+            features = ops.stop_gradient(self.extract_features(obs))
+        else:
             features = self.extract_features(obs)
-        qvalue_input = th.cat([features, actions], dim=1)
+        qvalue_input = ops.concat([features, actions], axis=1)
         return tuple(q_net(qvalue_input) for q_net in self.q_networks)
 
-    def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:
+    def q1_forward(self, obs: ms.Tensor, actions: ms.Tensor) -> ms.Tensor:
         """
         Only predict the Q-value using the first network.
         This allows to reduce computation when all the estimates are not needed
         (e.g. when updating the policy in TD3).
         """
-        with th.no_grad():
-            features = self.extract_features(obs)
-        return self.q_networks[0](th.cat([features, actions], dim=1))
+        features = ops.stop_gradient(self.extract_features(obs))
+        return self.q_networks[0](ops.concat([features, actions], axis=1))

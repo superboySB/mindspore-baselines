@@ -10,6 +10,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, TypeVar, Un
 import gym
 import numpy as np
 import torch as th
+import mindspore as ms
+from mindspore import ops, nn
 
 from mindspore_baselines.common import utils
 from mindspore_baselines.common.callbacks import BaseCallback, CallbackList, ConvertCallback, ProgressBarCallback
@@ -18,12 +20,13 @@ from mindspore_baselines.common.logger import Logger
 from mindspore_baselines.common.monitor import Monitor
 from mindspore_baselines.common.noise import ActionNoise
 from mindspore_baselines.common.policies import BasePolicy
-from mindspore_baselines.common.preprocessing import check_for_nested_spaces, is_image_space, is_image_space_channels_first
-from mindspore_baselines.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
+from mindspore_baselines.common.preprocessing import check_for_nested_spaces, is_image_space, \
+    is_image_space_channels_first
+from mindspore_baselines.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, \
+    save_to_zip_file
 from mindspore_baselines.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from mindspore_baselines.common.utils import (
     check_for_correct_spaces,
-    get_device,
     get_schedule_fn,
     get_system_info,
     set_random_seed,
@@ -69,7 +72,7 @@ class BaseAlgorithm(ABC):
     :param tensorboard_log: the log location for tensorboard (if None, no logging)
     :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
         debug messages
-    :param device: Device on which the code should run.
+    :param device: Device on which the code should run. (CPU/GPU/Ascend)
         By default, it will try to use a Cuda compatible device and fallback to cpu
         if it is not possible.
     :param support_multi_env: Whether the algorithm supports training
@@ -88,20 +91,20 @@ class BaseAlgorithm(ABC):
     policy_aliases: Dict[str, Type[BasePolicy]] = {}
 
     def __init__(
-        self,
-        policy: Union[str, Type[BasePolicy]],
-        env: Union[GymEnv, str, None],
-        learning_rate: Union[float, Schedule],
-        policy_kwargs: Optional[Dict[str, Any]] = None,
-        tensorboard_log: Optional[str] = None,
-        verbose: int = 0,
-        device: Union[th.device, str] = "auto",
-        support_multi_env: bool = False,
-        monitor_wrapper: bool = True,
-        seed: Optional[int] = None,
-        use_sde: bool = False,
-        sde_sample_freq: int = -1,
-        supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
+            self,
+            policy: Union[str, Type[BasePolicy]],
+            env: Union[GymEnv, str, None],
+            learning_rate: Union[float, Schedule],
+            policy_kwargs: Optional[Dict[str, Any]] = None,
+            tensorboard_log: Optional[str] = None,
+            verbose: int = 0,
+            device: str = "CPU",
+            support_multi_env: bool = False,
+            monitor_wrapper: bool = True,
+            seed: Optional[int] = None,
+            use_sde: bool = False,
+            sde_sample_freq: int = -1,
+            supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
     ):
         if isinstance(policy, str):
             self.policy_class = self._get_policy_from_name(policy)
@@ -176,10 +179,12 @@ class BaseAlgorithm(ABC):
 
             # Catch common mistake: using MlpPolicy/CnnPolicy instead of MultiInputPolicy
             if policy in ["MlpPolicy", "CnnPolicy"] and isinstance(self.observation_space, gym.spaces.Dict):
-                raise ValueError(f"You must use `MultiInputPolicy` when working with dict observation space, not {policy}")
+                raise ValueError(
+                    f"You must use `MultiInputPolicy` when working with dict observation space, not {policy}")
 
             if self.use_sde and not isinstance(self.action_space, gym.spaces.Box):
-                raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
+                raise ValueError(
+                    "generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
 
             if isinstance(self.action_space, gym.spaces.Box):
                 assert np.all(
@@ -218,7 +223,7 @@ class BaseAlgorithm(ABC):
                 # the other channel last), VecTransposeImage will throw an error
                 for space in env.observation_space.spaces.values():
                     wrap_with_vectranspose = wrap_with_vectranspose or (
-                        is_image_space(space) and not is_image_space_channels_first(space)
+                            is_image_space(space) and not is_image_space_channels_first(space)
                     )
             else:
                 wrap_with_vectranspose = is_image_space(env.observation_space) and not is_image_space_channels_first(
@@ -268,7 +273,7 @@ class BaseAlgorithm(ABC):
         """
         self._current_progress_remaining = 1.0 - float(num_timesteps) / float(total_timesteps)
 
-    def _update_learning_rate(self, optimizers: Union[List[th.optim.Optimizer], th.optim.Optimizer]) -> None:
+    def _update_learning_rate(self, optimizers: Union[List[nn.Optimizer], nn.Optimizer]) -> None:
         """
         Update the optimizers learning rate using the current learning rate schedule
         and the current progress remaining (from 1 to 0).
@@ -341,9 +346,9 @@ class BaseAlgorithm(ABC):
         return state_dicts, []
 
     def _init_callback(
-        self,
-        callback: MaybeCallback,
-        progress_bar: bool = False,
+            self,
+            callback: MaybeCallback,
+            progress_bar: bool = False,
     ) -> BaseCallback:
         """
         :param callback: Callback(s) called at every step with state of the algorithm.
@@ -366,12 +371,12 @@ class BaseAlgorithm(ABC):
         return callback
 
     def _setup_learn(
-        self,
-        total_timesteps: int,
-        callback: MaybeCallback = None,
-        reset_num_timesteps: bool = True,
-        tb_log_name: str = "run",
-        progress_bar: bool = False,
+            self,
+            total_timesteps: int,
+            callback: MaybeCallback = None,
+            reset_num_timesteps: bool = True,
+            tb_log_name: str = "run",
+            progress_bar: bool = False,
     ) -> Tuple[int, BaseCallback]:
         """
         Initialize different variables needed for training.
@@ -491,13 +496,13 @@ class BaseAlgorithm(ABC):
 
     @abstractmethod
     def learn(
-        self: BaseAlgorithmSelf,
-        total_timesteps: int,
-        callback: MaybeCallback = None,
-        log_interval: int = 100,
-        tb_log_name: str = "run",
-        reset_num_timesteps: bool = True,
-        progress_bar: bool = False,
+            self: BaseAlgorithmSelf,
+            total_timesteps: int,
+            callback: MaybeCallback = None,
+            log_interval: int = 100,
+            tb_log_name: str = "run",
+            reset_num_timesteps: bool = True,
+            progress_bar: bool = False,
     ) -> BaseAlgorithmSelf:
         """
         Return a trained model.
@@ -512,11 +517,11 @@ class BaseAlgorithm(ABC):
         """
 
     def predict(
-        self,
-        observation: np.ndarray,
-        state: Optional[Tuple[np.ndarray, ...]] = None,
-        episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
+            self,
+            observation: Union[np.ndarray, Dict[str, np.ndarray]],
+            state: Optional[Tuple[np.ndarray, ...]] = None,
+            episode_start: Optional[np.ndarray] = None,
+            deterministic: bool = False,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
         """
         Get the policy action from an observation (and optional hidden state).
@@ -542,16 +547,16 @@ class BaseAlgorithm(ABC):
         """
         if seed is None:
             return
-        set_random_seed(seed, using_cuda=self.device.type == th.device("cuda").type)
+        set_random_seed(seed)
         self.action_space.seed(seed)
         if self.env is not None:
             self.env.seed(seed)
 
     def set_parameters(
-        self,
-        load_path_or_dict: Union[str, Dict[str, Dict]],
-        exact_match: bool = True,
-        device: Union[th.device, str] = "auto",
+            self,
+            load_path_or_dict: Union[str, Dict[str, Dict]],
+            exact_match: bool = True,
+            device: Union[th.device, str] = "auto",
     ) -> None:
         """
         Load parameters from a given zip-file or a nested dictionary containing parameters for
@@ -617,14 +622,14 @@ class BaseAlgorithm(ABC):
 
     @classmethod
     def load(
-        cls: Type[BaseAlgorithmSelf],
-        path: Union[str, pathlib.Path, io.BufferedIOBase],
-        env: Optional[GymEnv] = None,
-        device: Union[th.device, str] = "auto",
-        custom_objects: Optional[Dict[str, Any]] = None,
-        print_system_info: bool = False,
-        force_reset: bool = True,
-        **kwargs,
+            cls: Type[BaseAlgorithmSelf],
+            path: Union[str, pathlib.Path, io.BufferedIOBase],
+            env: Optional[GymEnv] = None,
+            device: Union[th.device, str] = "auto",
+            custom_objects: Optional[Dict[str, Any]] = None,
+            print_system_info: bool = False,
+            force_reset: bool = True,
+            **kwargs,
     ) -> BaseAlgorithmSelf:
         """
         Load the model from a zip-file.
@@ -744,10 +749,10 @@ class BaseAlgorithm(ABC):
         return params
 
     def save(
-        self,
-        path: Union[str, pathlib.Path, io.BufferedIOBase],
-        exclude: Optional[Iterable[str]] = None,
-        include: Optional[Iterable[str]] = None,
+            self,
+            path: Union[str, pathlib.Path, io.BufferedIOBase],
+            exclude: Optional[Iterable[str]] = None,
+            include: Optional[Iterable[str]] = None,
     ) -> None:
         """
         Save all the attributes of the object and the model parameters in a zip-file.
@@ -791,4 +796,4 @@ class BaseAlgorithm(ABC):
         # Build dict of state_dicts
         params_to_save = self.get_parameters()
 
-        save_to_zip_file(path, data=data, params=params_to_save, pytorch_variables=pytorch_variables)
+        save_to_zip_file(path, data=data, params=params_to_save, mindspore_variables=pytorch_variables)

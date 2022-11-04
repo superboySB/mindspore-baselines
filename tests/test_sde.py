@@ -51,7 +51,7 @@ def test_state_dependent_exploration_grad():
             grad[i, j] = (d_log_policy_j * d_log_sigma_j).mean()
 
     # sigma.grad should be equal to grad
-    assert sigma_hat.grad.allclose(grad)
+    assert sigma_hat.grad.torch_allclose(grad)
 
 
 def test_sde_check():

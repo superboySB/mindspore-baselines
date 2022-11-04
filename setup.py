@@ -12,6 +12,7 @@ setup(
     install_requires=[
         "gym==0.21",
         "numpy",
+        'typing_extensions>=4.0,<5; python_version < "3.8.0"',
         # For saving models
         "cloudpickle",
         # For reading logs
@@ -28,6 +29,7 @@ setup(
             "pytest-cov",
             "pytest-env",
             "pytest-xdist",
+            "lark",
             # Type check
             "pytype",
             # Lint code
