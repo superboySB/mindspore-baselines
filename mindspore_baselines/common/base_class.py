@@ -72,9 +72,6 @@ class BaseAlgorithm(ABC):
     :param tensorboard_log: the log location for tensorboard (if None, no logging)
     :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
         debug messages
-    :param device: Device on which the code should run. (CPU/GPU/Ascend)
-        By default, it will try to use a Cuda compatible device and fallback to cpu
-        if it is not possible.
     :param support_multi_env: Whether the algorithm supports training
         with multiple environments (as in A2C)
     :param monitor_wrapper: When creating an environment, whether to wrap it
@@ -98,7 +95,6 @@ class BaseAlgorithm(ABC):
             policy_kwargs: Optional[Dict[str, Any]] = None,
             tensorboard_log: Optional[str] = None,
             verbose: int = 0,
-            device: str = "CPU",
             support_multi_env: bool = False,
             monitor_wrapper: bool = True,
             seed: Optional[int] = None,
@@ -111,9 +107,10 @@ class BaseAlgorithm(ABC):
         else:
             self.policy_class = policy
 
-        self.device = get_device(device)
+        self.device = ms.get_context("device_target")
+
         if verbose >= 1:
-            print(f"Using {self.device} device")
+            print(f"Using {self.device}")
 
         self.env = None  # type: Optional[GymEnv]
         # get VecNormalize object if needed
@@ -300,7 +297,6 @@ class BaseAlgorithm(ABC):
         """
         return [
             "policy",
-            "device",
             "env",
             "replay_buffer",
             "rollout_buffer",
@@ -327,7 +323,7 @@ class BaseAlgorithm(ABC):
         else:
             raise ValueError(f"Policy {policy_name} unknown")
 
-    def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
+    def _get_ms_save_params(self) -> Tuple[List[str], List[str]]:
         """
         Get the name of the torch variables that will be saved with
         PyTorch ``th.save``, ``th.load`` and ``state_dicts`` instead of the default
@@ -556,7 +552,6 @@ class BaseAlgorithm(ABC):
             self,
             load_path_or_dict: Union[str, Dict[str, Dict]],
             exact_match: bool = True,
-            device: Union[th.device, str] = "auto",
     ) -> None:
         """
         Load parameters from a given zip-file or a nested dictionary containing parameters for
@@ -568,18 +563,17 @@ class BaseAlgorithm(ABC):
         :param exact_match: If True, the given parameters should include parameters for each
             module and each of their parameters, otherwise raises an Exception. If set to False, this
             can be used to update only specific parameters.
-        :param device: Device on which the code should run.
         """
         params = None
         if isinstance(load_path_or_dict, dict):
             params = load_path_or_dict
         else:
-            _, params, _ = load_from_zip_file(load_path_or_dict, device=device)
+            _, params, _ = load_from_zip_file(load_path_or_dict)
 
         # Keep track which objects were updated.
         # `_get_torch_save_params` returns [params, other_pytorch_variables].
         # We are only interested in former here.
-        objects_needing_update = set(self._get_torch_save_params()[0])
+        objects_needing_update = set(self._get_ms_save_params()[0])
         updated_objects = set()
 
         for name in params:
@@ -625,7 +619,6 @@ class BaseAlgorithm(ABC):
             cls: Type[BaseAlgorithmSelf],
             path: Union[str, pathlib.Path, io.BufferedIOBase],
             env: Optional[GymEnv] = None,
-            device: Union[th.device, str] = "auto",
             custom_objects: Optional[Dict[str, Any]] = None,
             print_system_info: bool = False,
             force_reset: bool = True,
@@ -640,7 +633,6 @@ class BaseAlgorithm(ABC):
             load the agent from
         :param env: the new environment to run the loaded model on
             (can be None if you only need prediction from a trained model) has priority over any saved environment
-        :param device: Device on which the code should run.
         :param custom_objects: Dictionary of objects to replace
             upon loading. If a variable is present in this dictionary as a
             key, it will not be deserialized and the corresponding item
@@ -661,15 +653,9 @@ class BaseAlgorithm(ABC):
 
         data, params, pytorch_variables = load_from_zip_file(
             path,
-            device=device,
             custom_objects=custom_objects,
             print_system_info=print_system_info,
         )
-
-        # Remove stored device information and replace with ours
-        if "policy_kwargs" in data:
-            if "device" in data["policy_kwargs"]:
-                del data["policy_kwargs"]["device"]
 
         if "policy_kwargs" in kwargs and kwargs["policy_kwargs"] != data["policy_kwargs"]:
             raise ValueError(
@@ -701,7 +687,6 @@ class BaseAlgorithm(ABC):
         model = cls(  # pytype: disable=not-instantiable,wrong-keyword-args
             policy=data["policy_class"],
             env=env,
-            device=device,
             _init_setup_model=False,  # pytype: disable=not-instantiable,wrong-keyword-args
         )
 
@@ -711,7 +696,7 @@ class BaseAlgorithm(ABC):
         model._setup_model()
 
         # put state_dicts back in place
-        model.set_parameters(params, exact_match=True, device=device)
+        model.set_parameters(params, exact_match=True)
 
         # put other pytorch variables back in place
         if pytorch_variables is not None:
@@ -740,7 +725,7 @@ class BaseAlgorithm(ABC):
 
         :return: Mapping of from names of the objects to PyTorch state-dicts.
         """
-        state_dicts_names, _ = self._get_torch_save_params()
+        state_dicts_names, _ = self._get_ms_save_params()
         params = {}
         for name in state_dicts_names:
             attr = recursive_getattr(self, name)
@@ -773,7 +758,7 @@ class BaseAlgorithm(ABC):
         if include is not None:
             exclude = exclude.difference(include)
 
-        state_dicts_names, torch_variable_names = self._get_torch_save_params()
+        state_dicts_names, torch_variable_names = self._get_ms_save_params()
         all_pytorch_variables = state_dicts_names + torch_variable_names
         for torch_var in all_pytorch_variables:
             # We need to get only the name of the top most module as we'll remove that

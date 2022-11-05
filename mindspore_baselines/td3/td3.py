@@ -224,6 +224,6 @@ class TD3(OffPolicyAlgorithm):
     def _excluded_save_params(self) -> List[str]:
         return super()._excluded_save_params() + ["actor", "critic", "actor_target", "critic_target"]
 
-    def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
+    def _get_ms_save_params(self) -> Tuple[List[str], List[str]]:
         state_dicts = ["policy", "actor.optimizer", "critic.optimizer"]
         return state_dicts, []

@@ -45,30 +45,69 @@ MindSpore version of [Stable Baselines3](https://github.com/DLR-RM/stable-baseli
     pip install -e .[docs,tests,extra]
     ```
 
-4. [Optional] If you want to install all of RL environments in [rl-baselines3-zoo](https://github.com/DLR-RM/rl-baselines3-zoo), run:
-
-  ```sh
-  # 安装mujuco
-  sudo apt install libosmesa6-dev libgl1-mesa-glx libglfw3
-  wget https://mujoco.org/download/mujoco210-linux-x86_64.tar.gz
-  mkdir ~/.mujoco
-  tar -zxvf mujoco210-linux-x86_64.tar.gz -C ~/.mujoco
-  cd ~/.mujoco/mujoco210/bin && ./simulate
-  pip install -U 'mujoco-py<2.2,>=2.1'
-  
-  # 安装其他
-  pip install -e .[develop]
-  ```
-
-5. All unit tests in mindspore-baselines3 can be run using `pytest` runner:
+4. All unit tests in mindspore-baselines3 can be run using `pytest` runner:
 
     ```
-    pip install pytest pytest-cov
     make pytest
     ```
 
+5. [Optional] If you want to install all of RL environments in [rl-baselines3-zoo](https://github.com/DLR-RM/rl-baselines3-zoo), run:
+    ```sh
+    # 安装mujuco
+    sudo apt install libosmesa6-dev libgl1-mesa-glx libglfw3
+    wget https://mujoco.org/download/mujoco210-linux-x86_64.tar.gz
+    mkdir ~/.mujoco
+    tar -zxvf mujoco210-linux-x86_64.tar.gz -C ~/.mujoco
+    cd ~/.mujoco/mujoco210/bin && ./simulate
+    pip install -U 'mujoco-py<2.2,>=2.1'
+	
+	# 安装其他
+	pip install -e .[develop]
+	```
+
+## :computer: Example
+
+Most of the library tries to follow a sklearn-like syntax for the Reinforcement Learning algorithms.
+
+Here is a quick example of how to train and run PPO on a cartpole environment:
+
+```python
+import gym
+import mindspore as ms
+from mindspore_baselines3 import PPO
+
+ms.set_context(mode=ms.PYNATIVE_MODE, device_target="CPU", device_id=0)
+
+env = gym.make("CartPole-v1")
+
+model = PPO("MlpPolicy", env, verbose=1)
+model.learn(total_timesteps=10000)
+
+obs = env.reset()
+for i in range(1000):
+    action, _states = model.predict(obs, deterministic=True)
+    obs, reward, done, info = env.step(action)
+    env.render()
+    if done:
+      obs = env.reset()
+
+env.close()
+```
+
+Or just train a model with a one liner if [the environment is registered in Gym](https://github.com/openai/gym/wiki/Environments) and if [the policy is registered](https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html):
+
+```
+from stable_baselines3 import PPO
+
+model = PPO("MlpPolicy", "CartPole-v1").learn(10000)
+```
+
+Please read the [documentation](https://stable-baselines3.readthedocs.io/) for more examples.
+
+
 
 ## :computer: Training
+
 ### DQN
 
 ```shell

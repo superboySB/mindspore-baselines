@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import gym
 import numpy as np
-import torch as th
 
 from mindspore_baselines.common.base_class import BaseAlgorithm
 from mindspore_baselines.common.buffers import DictRolloutBuffer, RolloutBuffer
@@ -44,8 +43,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
         debug messages
     :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     :param supported_action_spaces: The action spaces supported by the algorithm.
     """
@@ -68,7 +65,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         policy_kwargs: Optional[Dict[str, Any]] = None,
         verbose: int = 0,
         seed: Optional[int] = None,
-        device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         supported_action_spaces: Optional[Tuple[gym.spaces.Space, ...]] = None,
     ):
@@ -79,7 +75,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             learning_rate=learning_rate,
             policy_kwargs=policy_kwargs,
             verbose=verbose,
-            device=device,
             use_sde=use_sde,
             sde_sample_freq=sde_sample_freq,
             support_multi_env=True,
@@ -109,7 +104,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.n_steps,
             self.observation_space,
             self.action_space,
-            device=self.device,
             gamma=self.gamma,
             gae_lambda=self.gae_lambda,
             n_envs=self.n_envs,
@@ -121,7 +115,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             use_sde=self.use_sde,
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
-        self.policy = self.policy.to(self.device)
+        self.policy = self.policy
 
     def collect_rollouts(
         self,
@@ -160,11 +154,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Sample a new noise matrix
                 self.policy.reset_noise(env.num_envs)
 
-            with th.no_grad():
-                # Convert to pytorch tensor or to TensorDict
-                obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, values, log_probs = self.policy(obs_tensor)
-            actions = actions.cpu().numpy()
+            # Convert to pytorch tensor or to TensorDict
+            obs_tensor = obs_as_tensor(self._last_obs, self.device)
+            actions, values, log_probs = self.policy(obs_tensor)
+            actions = actions.asnumpy()
 
             # Rescale and perform action
             clipped_actions = actions
@@ -197,18 +190,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     and infos[idx].get("TimeLimit.truncated", False)
                 ):
                     terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
-                    with th.no_grad():
-                        terminal_value = self.policy.predict_values(terminal_obs)[0]
+                    terminal_value = self.policy.predict_values(terminal_obs)[0]
                     rewards[idx] += self.gamma * terminal_value
 
             rollout_buffer.add(self._last_obs, actions, rewards, self._last_episode_starts, values, log_probs)
             self._last_obs = new_obs
             self._last_episode_starts = dones
 
-        with th.no_grad():
-            # Compute value for the last timestep
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))
-
+        # Compute value for the last timestep TODO: 受限于ms特性，应该不能提前算这个东西
+        values = self.policy.predict_values(obs_as_tensor(new_obs))
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
         callback.on_rollout_end()
@@ -272,7 +262,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         return self
 
-    def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
+    def _get_ms_save_params(self) -> Tuple[List[str], List[str]]:
         state_dicts = ["policy", "policy.optimizer"]
 
         return state_dicts, []

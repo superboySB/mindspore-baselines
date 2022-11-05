@@ -366,16 +366,16 @@ class HerReplayBuffer(DictReplayBuffer):
         next_observations = self._normalize_obs(next_observations, maybe_vec_env)
 
         if online_sampling:
-            next_obs = {key: self.to_torch(next_observations[key][:, 0, :]) for key in self._observation_keys}
+            next_obs = {key: self.to_mindspore(next_observations[key][:, 0, :]) for key in self._observation_keys}
 
-            normalized_obs = {key: self.to_torch(observations[key][:, 0, :]) for key in self._observation_keys}
+            normalized_obs = {key: self.to_mindspore(observations[key][:, 0, :]) for key in self._observation_keys}
 
             return DictReplayBufferSamples(
                 observations=normalized_obs,
-                actions=self.to_torch(transitions["action"]),
+                actions=self.to_mindspore(transitions["action"]),
                 next_observations=next_obs,
-                dones=self.to_torch(transitions["done"]),
-                rewards=self.to_torch(self._normalize_reward(transitions["reward"], maybe_vec_env)),
+                dones=self.to_mindspore(transitions["done"]),
+                rewards=self.to_mindspore(self._normalize_reward(transitions["reward"], maybe_vec_env)),
             )
         else:
             return observations, next_observations, transitions["action"], transitions["reward"]

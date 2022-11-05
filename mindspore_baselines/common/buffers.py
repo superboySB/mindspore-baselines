@@ -3,7 +3,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Generator, List, Optional, Union
 
 import numpy as np
-import torch as th
+import mindspore as ms
+from mindspore import ops,nn
 from gym import spaces
 
 from mindspore_baselines.common.preprocessing import get_action_dim, get_obs_shape
@@ -13,7 +14,6 @@ from mindspore_baselines.common.type_aliases import (
     ReplayBufferSamples,
     RolloutBufferSamples,
 )
-from mindspore_baselines.common.utils import get_device
 from mindspore_baselines.common.vec_env import VecNormalize
 
 try:
@@ -30,7 +30,6 @@ class BaseBuffer(ABC):
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
     :param action_space: Action space
-    :param device: PyTorch device
         to which the values will be converted
     :param n_envs: Number of parallel environments
     """
@@ -40,7 +39,6 @@ class BaseBuffer(ABC):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        device: Union[th.device, str] = "auto",
         n_envs: int = 1,
     ):
         super().__init__()
@@ -52,7 +50,6 @@ class BaseBuffer(ABC):
         self.action_dim = get_action_dim(action_space)
         self.pos = 0
         self.full = False
-        self.device = get_device(device)
         self.n_envs = n_envs
 
     @staticmethod
@@ -121,7 +118,7 @@ class BaseBuffer(ABC):
         """
         raise NotImplementedError()
 
-    def to_torch(self, array: np.ndarray, copy: bool = True) -> th.Tensor:
+    def to_mindspore(self, array: np.ndarray, copy: bool = True) -> ms.Tensor:
         """
         Convert a numpy array to a PyTorch tensor.
         Note: it copies the data by default
@@ -132,8 +129,8 @@ class BaseBuffer(ABC):
         :return:
         """
         if copy:
-            return th.tensor(array).to(self.device)
-        return th.as_tensor(array).to(self.device)
+            return ms.tensor(array)
+        return ms.Tensor(array)
 
     @staticmethod
     def _normalize_obs(
@@ -158,7 +155,6 @@ class ReplayBuffer(BaseBuffer):
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
     :param action_space: Action space
-    :param device: PyTorch device
     :param n_envs: Number of parallel environments
     :param optimize_memory_usage: Enable a memory efficient variant
         of the replay buffer which reduces by almost a factor two the memory used,
@@ -176,12 +172,11 @@ class ReplayBuffer(BaseBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        device: Union[th.device, str] = "auto",
         n_envs: int = 1,
         optimize_memory_usage: bool = False,
         handle_timeout_termination: bool = True,
     ):
-        super().__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super().__init__(buffer_size, observation_space, action_space, n_envs=n_envs)
 
         # Adjust buffer size
         self.buffer_size = max(buffer_size // n_envs, 1)
@@ -310,7 +305,7 @@ class ReplayBuffer(BaseBuffer):
             (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
             self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
         )
-        return ReplayBufferSamples(*tuple(map(self.to_torch, data)))
+        return ReplayBufferSamples(*tuple(map(self.to_mindspore, data)))
 
 
 class RolloutBuffer(BaseBuffer):
@@ -329,7 +324,6 @@ class RolloutBuffer(BaseBuffer):
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
     :param action_space: Action space
-    :param device: PyTorch device
     :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
         Equivalent to classic advantage when set to 1.
     :param gamma: Discount factor
@@ -341,13 +335,12 @@ class RolloutBuffer(BaseBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        device: Union[th.device, str] = "auto",
         gae_lambda: float = 1,
         gamma: float = 0.99,
         n_envs: int = 1,
     ):
 
-        super().__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super().__init__(buffer_size, observation_space, action_space, n_envs=n_envs)
         self.gae_lambda = gae_lambda
         self.gamma = gamma
         self.observations, self.actions, self.rewards, self.advantages = None, None, None, None
@@ -368,7 +361,7 @@ class RolloutBuffer(BaseBuffer):
         self.generator_ready = False
         super().reset()
 
-    def compute_returns_and_advantage(self, last_values: th.Tensor, dones: np.ndarray) -> None:
+    def compute_returns_and_advantage(self, last_values: ms.Tensor, dones: np.ndarray) -> None:
         """
         Post-processing step: compute the lambda-return (TD(lambda) estimate)
         and GAE(lambda) advantage.
@@ -388,7 +381,7 @@ class RolloutBuffer(BaseBuffer):
         :param dones: if the last step was a terminal step (one bool for each env).
         """
         # Convert to numpy
-        last_values = last_values.clone().cpu().numpy().flatten()
+        last_values = last_values.copy().asnumpy().flatten()
 
         last_gae_lam = 0
         for step in reversed(range(self.buffer_size)):
@@ -411,8 +404,8 @@ class RolloutBuffer(BaseBuffer):
         action: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
-        value: th.Tensor,
-        log_prob: th.Tensor,
+        value: ms.Tensor,
+        log_prob: ms.Tensor,
     ) -> None:
         """
         :param obs: Observation
@@ -483,7 +476,7 @@ class RolloutBuffer(BaseBuffer):
             self.advantages[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
         )
-        return RolloutBufferSamples(*tuple(map(self.to_torch, data)))
+        return RolloutBufferSamples(*tuple(map(self.to_mindspore, data)))
 
 
 class DictReplayBuffer(ReplayBuffer):
@@ -494,7 +487,6 @@ class DictReplayBuffer(ReplayBuffer):
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
     :param action_space: Action space
-    :param device: PyTorch device
     :param n_envs: Number of parallel environments
     :param optimize_memory_usage: Enable a memory efficient variant
         Disabled for now (see https://github.com/DLR-RM/stable-baselines3/pull/243#discussion_r531535702)
@@ -508,12 +500,11 @@ class DictReplayBuffer(ReplayBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        device: Union[th.device, str] = "auto",
         n_envs: int = 1,
         optimize_memory_usage: bool = False,
         handle_timeout_termination: bool = True,
     ):
-        super(ReplayBuffer, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super(ReplayBuffer, self).__init__(buffer_size, observation_space, action_space, n_envs=n_envs)
 
         assert isinstance(self.obs_shape, dict), "DictReplayBuffer must be used with Dict obs space only"
         self.buffer_size = max(buffer_size // n_envs, 1)
@@ -625,19 +616,19 @@ class DictReplayBuffer(ReplayBuffer):
         )
 
         # Convert to torch tensor
-        observations = {key: self.to_torch(obs) for key, obs in obs_.items()}
-        next_observations = {key: self.to_torch(obs) for key, obs in next_obs_.items()}
+        observations = {key: self.to_mindspore(obs) for key, obs in obs_.items()}
+        next_observations = {key: self.to_mindspore(obs) for key, obs in next_obs_.items()}
 
         return DictReplayBufferSamples(
             observations=observations,
-            actions=self.to_torch(self.actions[batch_inds, env_indices]),
+            actions=self.to_mindspore(self.actions[batch_inds, env_indices]),
             next_observations=next_observations,
             # Only use dones that are not due to timeouts
             # deactivated by default (timeouts is initialized as an array of False)
-            dones=self.to_torch(self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(
+            dones=self.to_mindspore(self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(
                 -1, 1
             ),
-            rewards=self.to_torch(self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env)),
+            rewards=self.to_mindspore(self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env)),
         )
 
 
@@ -659,7 +650,6 @@ class DictRolloutBuffer(RolloutBuffer):
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
     :param action_space: Action space
-    :param device: PyTorch device
     :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
         Equivalent to Monte-Carlo advantage estimate when set to 1.
     :param gamma: Discount factor
@@ -671,13 +661,12 @@ class DictRolloutBuffer(RolloutBuffer):
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        device: Union[th.device, str] = "auto",
         gae_lambda: float = 1,
         gamma: float = 0.99,
         n_envs: int = 1,
     ):
 
-        super(RolloutBuffer, self).__init__(buffer_size, observation_space, action_space, device, n_envs=n_envs)
+        super(RolloutBuffer, self).__init__(buffer_size, observation_space, action_space, n_envs=n_envs)
 
         assert isinstance(self.obs_shape, dict), "DictRolloutBuffer must be used with Dict obs space only"
 
@@ -709,8 +698,8 @@ class DictRolloutBuffer(RolloutBuffer):
         action: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
-        value: th.Tensor,
-        log_prob: th.Tensor,
+        value: ms.Tensor,
+        log_prob: ms.Tensor,
     ) -> None:  # pytype: disable=signature-mismatch
         """
         :param obs: Observation
@@ -770,10 +759,10 @@ class DictRolloutBuffer(RolloutBuffer):
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> DictRolloutBufferSamples:
 
         return DictRolloutBufferSamples(
-            observations={key: self.to_torch(obs[batch_inds]) for (key, obs) in self.observations.items()},
-            actions=self.to_torch(self.actions[batch_inds]),
-            old_values=self.to_torch(self.values[batch_inds].flatten()),
-            old_log_prob=self.to_torch(self.log_probs[batch_inds].flatten()),
-            advantages=self.to_torch(self.advantages[batch_inds].flatten()),
-            returns=self.to_torch(self.returns[batch_inds].flatten()),
+            observations={key: self.to_mindspore(obs[batch_inds]) for (key, obs) in self.observations.items()},
+            actions=self.to_mindspore(self.actions[batch_inds]),
+            old_values=self.to_mindspore(self.values[batch_inds].flatten()),
+            old_log_prob=self.to_mindspore(self.log_probs[batch_inds].flatten()),
+            advantages=self.to_mindspore(self.advantages[batch_inds].flatten()),
+            returns=self.to_mindspore(self.returns[batch_inds].flatten()),
         )
