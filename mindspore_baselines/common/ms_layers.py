@@ -2,15 +2,14 @@ from itertools import zip_longest
 from typing import Dict, List, Tuple, Type, Union
 
 import gym
-import torch as th
-from torch import nn
+import mindspore as ms
+from mindspore import ops,nn
 
 from mindspore_baselines.common.preprocessing import get_flattened_obs_dim, is_image_space
 from mindspore_baselines.common.type_aliases import TensorDict
-from mindspore_baselines.common.utils import get_device
 
 
-class BaseFeaturesExtractor(nn.Module):
+class BaseFeaturesExtractor(nn.Cell):
     """
     Base class that represents a features extractor.
 
@@ -28,7 +27,7 @@ class BaseFeaturesExtractor(nn.Module):
     def features_dim(self) -> int:
         return self._features_dim
 
-    def forward(self, observations: th.Tensor) -> th.Tensor:
+    def construct(self, observations: ms.Tensor) -> ms.Tensor:
         raise NotImplementedError()
 
 
@@ -44,7 +43,7 @@ class FlattenExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, get_flattened_obs_dim(observation_space))
         self.flatten = nn.Flatten()
 
-    def forward(self, observations: th.Tensor) -> th.Tensor:
+    def construct(self, observations: ms.Tensor) -> ms.Tensor:
         return self.flatten(observations)
 
 
@@ -73,7 +72,7 @@ class NatureCNN(BaseFeaturesExtractor):
             "https://stable-baselines3.readthedocs.io/en/master/common/env_checker.html"
         )
         n_input_channels = observation_space.shape[0]
-        self.cnn = nn.Sequential(
+        self.cnn = nn.SequentialCell(
             nn.Conv2d(n_input_channels, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
@@ -84,12 +83,11 @@ class NatureCNN(BaseFeaturesExtractor):
         )
 
         # Compute shape by doing one forward pass
-        with th.no_grad():
-            n_flatten = self.cnn(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+        n_flatten = ops.stop_gradient(self.cnn(ms.Tensor(observation_space.sample()[None]).astype("float32"))).shape[1]
 
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        self.linear = nn.SequentialCell(nn.Dense(n_flatten, features_dim), nn.ReLU())
 
-    def forward(self, observations: th.Tensor) -> th.Tensor:
+    def construct(self, observations: ms.Tensor) -> ms.Tensor:
         return self.linear(self.cnn(observations))
 
 
@@ -97,9 +95,9 @@ def create_mlp(
     input_dim: int,
     output_dim: int,
     net_arch: List[int],
-    activation_fn: Type[nn.Module] = nn.ReLU,
+    activation_fn: Type[nn.Cell] = nn.ReLU,
     squash_output: bool = False,
-) -> List[nn.Module]:
+) -> List[nn.Cell]:
     """
     Create a multi layer perceptron (MLP), which is
     a collection of fully-connected layers each followed by an activation function.
@@ -117,23 +115,23 @@ def create_mlp(
     """
 
     if len(net_arch) > 0:
-        modules = [nn.Linear(input_dim, net_arch[0]), activation_fn()]
+        modules = [nn.Dense(input_dim, net_arch[0]), activation_fn()]
     else:
         modules = []
 
     for idx in range(len(net_arch) - 1):
-        modules.append(nn.Linear(net_arch[idx], net_arch[idx + 1]))
+        modules.append(nn.Dense(net_arch[idx], net_arch[idx + 1]))
         modules.append(activation_fn())
 
     if output_dim > 0:
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else input_dim
-        modules.append(nn.Linear(last_layer_dim, output_dim))
+        modules.append(nn.Dense(last_layer_dim, output_dim))
     if squash_output:
         modules.append(nn.Tanh())
     return modules
 
 
-class MlpExtractor(nn.Module):
+class MlpExtractor(nn.Cell):
     """
     Constructs an MLP that receives the output from a previous feature extractor (i.e. a CNN) or directly
     the observations (if no feature extractor is applied) as an input and outputs a latent representation
@@ -166,11 +164,9 @@ class MlpExtractor(nn.Module):
         self,
         feature_dim: int,
         net_arch: List[Union[int, Dict[str, List[int]]]],
-        activation_fn: Type[nn.Module],
-        device: Union[th.device, str] = "auto",
+        activation_fn: Type[nn.Cell],
     ):
         super().__init__()
-        device = get_device(device)
         shared_net, policy_net, value_net = [], [], []
         policy_only_layers = []  # Layer sizes of the network that only belongs to the policy network
         value_only_layers = []  # Layer sizes of the network that only belongs to the value network
@@ -180,7 +176,7 @@ class MlpExtractor(nn.Module):
         for layer in net_arch:
             if isinstance(layer, int):  # Check that this is a shared layer
                 # TODO: give layer a meaningful name
-                shared_net.append(nn.Linear(last_layer_dim_shared, layer))  # add linear of size layer
+                shared_net.append(nn.Dense(last_layer_dim_shared, layer))  # add linear of size layer
                 shared_net.append(activation_fn())
                 last_layer_dim_shared = layer
             else:
@@ -201,13 +197,13 @@ class MlpExtractor(nn.Module):
         for pi_layer_size, vf_layer_size in zip_longest(policy_only_layers, value_only_layers):
             if pi_layer_size is not None:
                 assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
-                policy_net.append(nn.Linear(last_layer_dim_pi, pi_layer_size))
+                policy_net.append(nn.Dense(last_layer_dim_pi, pi_layer_size))
                 policy_net.append(activation_fn())
                 last_layer_dim_pi = pi_layer_size
 
             if vf_layer_size is not None:
                 assert isinstance(vf_layer_size, int), "Error: net_arch[-1]['vf'] must only contain integers."
-                value_net.append(nn.Linear(last_layer_dim_vf, vf_layer_size))
+                value_net.append(nn.Dense(last_layer_dim_vf, vf_layer_size))
                 value_net.append(activation_fn())
                 last_layer_dim_vf = vf_layer_size
 
@@ -217,11 +213,11 @@ class MlpExtractor(nn.Module):
 
         # Create networks
         # If the list of layers is empty, the network will just act as an Identity module
-        self.shared_net = nn.Sequential(*shared_net).to(device)
-        self.policy_net = nn.Sequential(*policy_net).to(device)
-        self.value_net = nn.Sequential(*value_net).to(device)
+        self.shared_net = nn.SequentialCell(*shared_net)
+        self.policy_net = nn.SequentialCell(*policy_net)
+        self.value_net = nn.SequentialCell(*value_net)
 
-    def forward(self, features: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+    def construct(self, features: ms.Tensor) -> Tuple[ms.Tensor, ms.Tensor]:
         """
         :return: latent_policy, latent_value of the specified network.
             If all layers are shared, then ``latent_policy == latent_value``
@@ -229,10 +225,10 @@ class MlpExtractor(nn.Module):
         shared_latent = self.shared_net(features)
         return self.policy_net(shared_latent), self.value_net(shared_latent)
 
-    def forward_actor(self, features: th.Tensor) -> th.Tensor:
+    def forward_actor(self, features: ms.Tensor) -> ms.Tensor:
         return self.policy_net(self.shared_net(features))
 
-    def forward_critic(self, features: th.Tensor) -> th.Tensor:
+    def forward_critic(self, features: ms.Tensor) -> ms.Tensor:
         return self.value_net(self.shared_net(features))
 
 
@@ -264,17 +260,17 @@ class CombinedExtractor(BaseFeaturesExtractor):
                 extractors[key] = nn.Flatten()
                 total_concat_size += get_flattened_obs_dim(subspace)
 
-        self.extractors = nn.ModuleDict(extractors)
+        self.extractors = extractors
 
         # Update the features dim manually
         self._features_dim = total_concat_size
 
-    def forward(self, observations: TensorDict) -> th.Tensor:
+    def construct(self, observations: TensorDict) -> ms.Tensor:
         encoded_tensor_list = []
 
         for key, extractor in self.extractors.items():
             encoded_tensor_list.append(extractor(observations[key]))
-        return th.cat(encoded_tensor_list, dim=1)
+        return ops.concat(encoded_tensor_list, axis=1)
 
 
 def get_actor_critic_arch(net_arch: Union[List[int], Dict[str, List[int]]]) -> Tuple[List[int], List[int]]:

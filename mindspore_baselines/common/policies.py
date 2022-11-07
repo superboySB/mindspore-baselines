@@ -3,14 +3,13 @@
 import collections
 import copy
 import pickle
-from abc import ABC, abstractmethod
-from functools import partial
+from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import gym
 import numpy as np
 import mindspore as ms
-from mindspore import ops,nn
+from mindspore import ops, nn
 
 from mindspore_baselines.common.distributions import (
     BernoulliDistribution,
@@ -22,7 +21,7 @@ from mindspore_baselines.common.distributions import (
     make_proba_distribution,
 )
 from mindspore_baselines.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
-from mindspore_baselines.common.torch_layers import (
+from mindspore_baselines.common.ms_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
     FlattenExtractor,
@@ -59,15 +58,15 @@ class BaseModel(nn.Cell):
     """
 
     def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
-        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        features_extractor: Optional[nn.Cell] = None,
-        normalize_images: bool = True,
-        optimizer_class: Type[nn.Optimizer] = nn.Adam,
-        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+            features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+            features_extractor: Optional[nn.Cell] = None,
+            normalize_images: bool = True,
+            optimizer_class: Type[nn.Optimizer] = nn.Adam,
+            optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
 
@@ -90,9 +89,9 @@ class BaseModel(nn.Cell):
         self.features_extractor_kwargs = features_extractor_kwargs
 
     def _update_features_extractor(
-        self,
-        net_kwargs: Dict[str, Any],
-        features_extractor: Optional[BaseFeaturesExtractor] = None,
+            self,
+            net_kwargs: Dict[str, Any],
+            features_extractor: Optional[BaseFeaturesExtractor] = None,
     ) -> Dict[str, Any]:
         """
         Update the network keyword arguments and create a new features extractor object if needed.
@@ -141,7 +140,6 @@ class BaseModel(nn.Cell):
             normalize_images=self.normalize_images,
         )
 
-
     def save(self, path: str) -> None:
         """
         Save model to a given location.
@@ -187,9 +185,6 @@ class BaseModel(nn.Cell):
             # Increment the pointer
             pointer += num_param
 
-
-
-
     def parameters_to_vector(self) -> np.ndarray:
         """
         Convert the parameters to a 1D vector.
@@ -202,7 +197,6 @@ class BaseModel(nn.Cell):
             vec.append(param.view(-1))
         vec = ops.concat(vec)
         return vec.asnumpy()
-
 
     def set_training_mode(self, mode: bool) -> None:
         """
@@ -255,7 +249,7 @@ class BaseModel(nn.Cell):
         return observation, vectorized_env
 
 
-class BasePolicy(BaseModel, ABC):
+class BasePolicy(BaseModel):
     """The base policy object.
 
     Parameters are mostly the same as `BaseModel`; additions are documented below.
@@ -282,15 +276,15 @@ class BasePolicy(BaseModel, ABC):
         return self._squash_output
 
     @staticmethod
-    def init_weights(module: nn.Cell, gain: float = 1) -> None:
+    def init_weights(cell: nn.Cell, gain: float = 1) -> None:
         """
         Orthogonal initialization (used in PPO and A2C)
         """
-        from mindspore.common.initializer import Zero, Orthogonal
-        if isinstance(module, (nn.Dense, nn.Conv2d)):
-            module.weight.set_data(Orthogonal(gain))
-            if module.bias is not None:
-                module.bias.set_data(Zero())
+        from mindspore.common.initializer import initializer, Zero, Orthogonal
+        if isinstance(cell, (nn.Dense, nn.Conv2d)):
+            cell.weight.set_data(initializer(Orthogonal(gain), cell.weight.shape, cell.weight.dtype))
+            if cell.bias is not None:
+                cell.bias.set_data(initializer(Zero(), cell.bias.shape, cell.bias.dtype))
 
     @abstractmethod
     def _predict(self, observation: ms.Tensor, deterministic: bool = False) -> ms.Tensor:
@@ -306,11 +300,11 @@ class BasePolicy(BaseModel, ABC):
         """
 
     def predict(
-        self,
-        observation: Union[np.ndarray, Dict[str, np.ndarray]],
-        state: Optional[Tuple[np.ndarray, ...]] = None,
-        episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
+            self,
+            observation: Union[np.ndarray, Dict[str, np.ndarray]],
+            state: Optional[Tuple[np.ndarray, ...]] = None,
+            episode_start: Optional[np.ndarray] = None,
+            deterministic: bool = False,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
         """
         Get the policy action from an observation (and optional hidden state).
@@ -408,23 +402,23 @@ class ActorCriticPolicy(BasePolicy):
     """
 
     def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        lr_schedule: Schedule,
-        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Cell] = nn.Tanh,
-        ortho_init: bool = True,
-        use_sde: bool = False,
-        log_std_init: float = 0.0,
-        full_std: bool = True,
-        use_expln: bool = False,
-        squash_output: bool = False,
-        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
-        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        normalize_images: bool = True,
-        optimizer_class: Type[nn.Optimizer] = nn.Adam,
-        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            lr_schedule: Schedule,
+            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+            activation_fn: Type[nn.Cell] = nn.Tanh,
+            ortho_init: bool = True,
+            use_sde: bool = False,
+            log_std_init: float = 0.0,
+            full_std: bool = True,
+            use_expln: bool = False,
+            squash_output: bool = False,
+            features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+            features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+            normalize_images: bool = True,
+            optimizer_class: Type[nn.Optimizer] = nn.Adam,
+            optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
 
         if optimizer_kwargs is None:
@@ -507,7 +501,8 @@ class ActorCriticPolicy(BasePolicy):
 
         :param n_envs:
         """
-        assert isinstance(self.action_dist, StateDependentNoiseDistribution), "reset_noise() is only available when using gSDE"
+        assert isinstance(self.action_dist,
+                          StateDependentNoiseDistribution), "reset_noise() is only available when using gSDE"
         self.action_dist.sample_weights(self.log_std, batch_size=n_envs)
 
     def _build_mlp_extractor(self) -> None:
@@ -543,7 +538,8 @@ class ActorCriticPolicy(BasePolicy):
             self.action_net, self.log_std = self.action_dist.proba_distribution_net(
                 latent_dim=latent_dim_pi, latent_sde_dim=latent_dim_pi, log_std_init=self.log_std_init
             )
-        elif isinstance(self.action_dist, (CategoricalDistribution, MultiCategoricalDistribution, BernoulliDistribution)):
+        elif isinstance(self.action_dist,
+                        (CategoricalDistribution, MultiCategoricalDistribution, BernoulliDistribution)):
             self.action_net = self.action_dist.proba_distribution_net(latent_dim=latent_dim_pi)
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
@@ -556,17 +552,18 @@ class ActorCriticPolicy(BasePolicy):
             # Values from stable-baselines.
             # features_extractor/mlp values are
             # originally from openai/baselines (default gains/init_scales).
-            module_gains = {
+            cell_gains = {
                 self.features_extractor: np.sqrt(2),
                 self.mlp_extractor: np.sqrt(2),
                 self.action_net: 0.01,
                 self.value_net: 1,
             }
-            for module, gain in module_gains.items():
-                module.apply(partial(self.init_weights, gain=gain))
+            for cell, gain in cell_gains.items():
+                self.init_weights(cell, gain)
 
         # Setup optimizer with initial learning rate
-        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+        self.optimizer = self.optimizer_class(self.trainable_params(), learning_rate=lr_schedule(1),
+                                              **self.optimizer_kwargs)
 
     def construct(self, obs: ms.Tensor, deterministic: bool = False) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor]:
         """
@@ -696,23 +693,23 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
     """
 
     def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        lr_schedule: Schedule,
-        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Cell] = nn.Tanh,
-        ortho_init: bool = True,
-        use_sde: bool = False,
-        log_std_init: float = 0.0,
-        full_std: bool = True,
-        use_expln: bool = False,
-        squash_output: bool = False,
-        features_extractor_class: Type[BaseFeaturesExtractor] = NatureCNN,
-        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        normalize_images: bool = True,
-        optimizer_class: Type[nn.Optimizer] = nn.Adam,
-        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            lr_schedule: Schedule,
+            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+            activation_fn: Type[nn.Cell] = nn.Tanh,
+            ortho_init: bool = True,
+            use_sde: bool = False,
+            log_std_init: float = 0.0,
+            full_std: bool = True,
+            use_expln: bool = False,
+            squash_output: bool = False,
+            features_extractor_class: Type[BaseFeaturesExtractor] = NatureCNN,
+            features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+            normalize_images: bool = True,
+            optimizer_class: Type[nn.Optimizer] = nn.Adam,
+            optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             observation_space,
@@ -766,23 +763,23 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
     """
 
     def __init__(
-        self,
-        observation_space: gym.spaces.Dict,
-        action_space: gym.spaces.Space,
-        lr_schedule: Schedule,
-        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Cell] = nn.Tanh,
-        ortho_init: bool = True,
-        use_sde: bool = False,
-        log_std_init: float = 0.0,
-        full_std: bool = True,
-        use_expln: bool = False,
-        squash_output: bool = False,
-        features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
-        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        normalize_images: bool = True,
-        optimizer_class: Type[nn.Optimizer] = nn.Adam,
-        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            observation_space: gym.spaces.Dict,
+            action_space: gym.spaces.Space,
+            lr_schedule: Schedule,
+            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+            activation_fn: Type[nn.Cell] = nn.Tanh,
+            ortho_init: bool = True,
+            use_sde: bool = False,
+            log_std_init: float = 0.0,
+            full_std: bool = True,
+            use_expln: bool = False,
+            squash_output: bool = False,
+            features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
+            features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+            normalize_images: bool = True,
+            optimizer_class: Type[nn.Optimizer] = nn.Adam,
+            optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             observation_space,
@@ -832,16 +829,16 @@ class ContinuousCritic(BaseModel):
     """
 
     def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        net_arch: List[int],
-        features_extractor: nn.Cell,
-        features_dim: int,
-        activation_fn: Type[nn.Cell] = nn.ReLU,
-        normalize_images: bool = True,
-        n_critics: int = 2,
-        share_features_extractor: bool = True,
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            net_arch: List[int],
+            features_extractor: nn.Cell,
+            features_dim: int,
+            activation_fn: Type[nn.Cell] = nn.ReLU,
+            normalize_images: bool = True,
+            n_critics: int = 2,
+            share_features_extractor: bool = True,
     ):
         super().__init__(
             observation_space,

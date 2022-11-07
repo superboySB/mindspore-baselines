@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 try:
     from tensorboardX import SummaryWriter
-    from tensorboardX import hparams
+    from .sb3_compat.func_torch_like import torch_tb_hparams as hparams
 except ImportError:
     SummaryWriter = None
 

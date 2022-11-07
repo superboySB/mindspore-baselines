@@ -5,7 +5,7 @@ import torch as th
 from torch import nn
 
 from mindspore_baselines.common.policies import BasePolicy
-from mindspore_baselines.common.torch_layers import (
+from mindspore_baselines.common.ms_layers import (
     BaseFeaturesExtractor,
     CombinedExtractor,
     FlattenExtractor,

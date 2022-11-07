@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import gym
 import numpy as np
+from mindspore import ops
 
 from mindspore_baselines.common.base_class import BaseAlgorithm
 from mindspore_baselines.common.buffers import DictRolloutBuffer, RolloutBuffer
@@ -155,7 +156,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 self.policy.reset_noise(env.num_envs)
 
             # Convert to pytorch tensor or to TensorDict
-            obs_tensor = obs_as_tensor(self._last_obs, self.device)
+            obs_tensor = obs_as_tensor(self._last_obs)
             actions, values, log_probs = self.policy(obs_tensor)
             actions = actions.asnumpy()
 
@@ -197,7 +198,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self._last_obs = new_obs
             self._last_episode_starts = dones
 
-        # Compute value for the last timestep TODO: 受限于ms特性，应该不能提前算这个东西
+        # Compute value for the last timestep
         values = self.policy.predict_values(obs_as_tensor(new_obs))
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 

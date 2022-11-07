@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from mindspore_baselines import A2C, DQN, PPO, SAC, TD3
 from mindspore_baselines.common.preprocessing import get_flattened_obs_dim
-from mindspore_baselines.common.torch_layers import BaseFeaturesExtractor
+from mindspore_baselines.common.ms_layers import BaseFeaturesExtractor
 
 MODEL_LIST = [
     PPO,

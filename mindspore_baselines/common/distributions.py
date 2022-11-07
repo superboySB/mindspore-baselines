@@ -684,7 +684,7 @@ def make_proba_distribution(
         )
 
 
-def kl_divergence(dist_true: Distribution, dist_pred: Distribution) -> th.Tensor:
+def kl_divergence(dist_true: Distribution, dist_pred: Distribution) -> ms.Tensor:
     """
     Wrapper for the PyTorch implementation of the full form KL Divergence
 

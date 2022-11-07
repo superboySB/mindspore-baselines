@@ -120,7 +120,7 @@ class BaseBuffer(ABC):
 
     def to_mindspore(self, array: np.ndarray, copy: bool = True) -> ms.Tensor:
         """
-        Convert a numpy array to a PyTorch tensor.
+        Convert a numpy array to a MindSpore tensor.
         Note: it copies the data by default
 
         :param array:
@@ -129,7 +129,7 @@ class BaseBuffer(ABC):
         :return:
         """
         if copy:
-            return ms.tensor(array)
+            return ms.Tensor(array)
         return ms.Tensor(array)
 
     @staticmethod
@@ -433,8 +433,8 @@ class RolloutBuffer(BaseBuffer):
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.episode_starts[self.pos] = np.array(episode_start).copy()
-        self.values[self.pos] = value.clone().cpu().numpy().flatten()
-        self.log_probs[self.pos] = log_prob.clone().cpu().numpy()
+        self.values[self.pos] = value.copy().asnumpy().flatten()
+        self.log_probs[self.pos] = log_prob.copy().asnumpy()
         self.pos += 1
         if self.pos == self.buffer_size:
             self.full = True

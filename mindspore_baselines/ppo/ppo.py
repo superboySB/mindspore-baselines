@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 
 import numpy as np
 import mindspore as ms
-from mindspore import nn, ops
+from mindspore import nn, ops,ms_function
 from gym import spaces
 
 from mindspore_baselines.common.on_policy_algorithm import OnPolicyAlgorithm
@@ -174,6 +174,47 @@ class PPO(OnPolicyAlgorithm):
         """
         Update policy using the currently gathered rollout buffer.
         """
+
+        # Define forward step
+        # todo: 现在的吞吐率比torch慢了一个数量级，是否有办法在类的方法里可以加使用ms_function装饰器加速？
+        # @ms_function
+        def forward_fn(observations, actions, returns, advantages):
+            values, log_prob, entropy = self.policy.evaluate_actions(observations, actions)
+            values = values.flatten()
+
+            # ratio between old and new policy, should be one at the first iteration
+            ratio = ops.exp(log_prob - rollout_data.old_log_prob)
+
+            # clipped surrogate loss
+            policy_loss_1 = advantages * ratio
+            policy_loss_2 = advantages * ms.numpy.clip(ratio, 1 - clip_range, 1 + clip_range)
+            policy_loss = -ops.minimum(policy_loss_1, policy_loss_2).mean()
+
+            # Logging
+            clip_fraction = ops.mean((ops.abs(ratio - 1) > clip_range).astype("float32"))
+
+            if self.clip_range_vf is None:
+                # No clipping
+                values_pred = values
+            else:
+                # Clip the difference between old and new value
+                # NOTE: this depends on the reward scaling
+                values_pred = rollout_data.old_values + ms.numpy.clip(
+                    values - rollout_data.old_values, -clip_range_vf, clip_range_vf
+                )
+            # Value loss using the TD(gae_lambda) target
+            value_loss = nn.MSELoss("mean")(logits=values_pred, labels=returns)
+
+            # Entropy loss favor exploration
+            if entropy is None:
+                # Approximate entropy when no analytical form
+                entropy_loss = -ops.mean(-log_prob)
+            else:
+                entropy_loss = -ops.mean(entropy)
+
+            total_loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+            return total_loss, policy_loss, entropy_loss, value_loss, clip_fraction, log_prob
+
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
         # Update optimizer learning rate
@@ -187,6 +228,7 @@ class PPO(OnPolicyAlgorithm):
         entropy_losses = []
         pg_losses, value_losses = [], []
         clip_fractions = []
+        total_losses = []
 
         continue_training = True
 
@@ -202,59 +244,19 @@ class PPO(OnPolicyAlgorithm):
                     actions = rollout_data.actions.astype("int32").flatten()
                 returns = rollout_data.returns
 
-                # Train step
-                def train_step(observations, actions, returns):  # todo: 是否可以这么写，应该有问题
-                    # Re-sample the noise matrix because the log_std has changed
-                    if self.use_sde:
-                        self.policy.reset_noise(self.batch_size)
+                # Normalize advantage
+                advantages = rollout_data.advantages
+                # Normalization does not make sense if mini batchsize == 1, see GH issue #325
+                if self.normalize_advantage and len(advantages) > 1:
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                    values, log_prob, entropy = self.policy.evaluate_actions(observations, actions)
-                    values = values.flatten()
-
-                    # Normalize advantage
-                    advantages = rollout_data.advantages
-                    # Normalization does not make sense if mini batchsize == 1, see GH issue #325
-                    if self.normalize_advantage and len(advantages) > 1:
-                        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-                    # ratio between old and new policy, should be one at the first iteration
-                    ratio = ops.exp(log_prob - rollout_data.old_log_prob)
-
-                    # clipped surrogate loss
-                    policy_loss_1 = advantages * ratio
-                    policy_loss_2 = advantages * ms.numpy.clip(ratio, 1 - clip_range, 1 + clip_range)
-                    policy_loss = -ops.min(policy_loss_1, policy_loss_2).mean()
-
-                    # Logging
-
-                    clip_fraction = ops.mean((ops.abs(ratio - 1) > clip_range).astype("float32"))
-
-                    if self.clip_range_vf is None:
-                        # No clipping
-                        values_pred = values
-                    else:
-                        # Clip the difference between old and new value
-                        # NOTE: this depends on the reward scaling
-                        values_pred = rollout_data.old_values + ms.numpy.clip(
-                            values - rollout_data.old_values, -clip_range_vf, clip_range_vf
-                        )
-                    # Value loss using the TD(gae_lambda) target
-                    value_loss = nn.MSELoss("mean")(logits=values_pred, labels=returns)
-
-                    # Entropy loss favor exploration
-                    if entropy is None:
-                        # Approximate entropy when no analytical form
-                        entropy_loss = -ops.mean(-log_prob)
-                    else:
-                        entropy_loss = -ops.mean(entropy)
-
-                    total_loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
-                    return total_loss, policy_loss, entropy_loss, value_loss, clip_fraction, log_prob
-
-
-                grad_fn = ops.value_and_grad(train_step, None, self.policy.trainable_params())
+                # Re-sample the noise matrix because the log_std has changed
+                if self.use_sde:
+                    self.policy.reset_noise(self.batch_size)
+                grad_fn = ops.value_and_grad(forward_fn, None, self.policy.trainable_params(), has_aux=True)
                 (total_loss, policy_loss, entropy_loss, value_loss, clip_fraction, log_prob), grads = grad_fn(
-                    observations, actions, returns)
+                    observations, actions, returns, advantages)
+                total_losses.append(total_loss.asnumpy())
                 pg_losses.append(policy_loss.asnumpy())
                 value_losses.append(value_loss.asnumpy())
                 clip_fractions.append(clip_fraction.asnumpy())
@@ -265,8 +267,9 @@ class PPO(OnPolicyAlgorithm):
                 # and discussion in PR #419: https://github.com/DLR-RM/stable-baselines3/pull/419
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 log_ratio = log_prob - rollout_data.old_log_prob
-                approx_kl_div = ops.mean((ops.exp(log_ratio) - 1) - log_ratio).asnumpy()
-                approx_kl_divs.append(approx_kl_div)
+                approx_kl_div = ops.mean((ops.exp(log_ratio) - 1) - log_ratio)
+                approx_kl_divs.append(approx_kl_div.asnumpy())
+
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                     continue_training = False
                     if self.verbose >= 1:
@@ -274,7 +277,7 @@ class PPO(OnPolicyAlgorithm):
                     break
 
                 # Optimization step
-                grads = ops.clip_by_global_norm(grads, clip_norm=self.max_grad_norm)  # Clip grad norm
+                # grads = ops.clip_by_global_norm(grads, clip_norm=self.max_grad_norm)  # Clip grad norm
                 self.policy.optimizer(grads)
 
             if not continue_training:
@@ -289,7 +292,7 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
-        self.logger.record("train/loss", loss.asnumpy())
+        self.logger.record("train/loss", total_losses[-1])
         self.logger.record("train/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", ops.exp(self.policy.log_std).mean().asnumpy())

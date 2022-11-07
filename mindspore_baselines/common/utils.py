@@ -65,11 +65,10 @@ def update_learning_rate(optimizer: nn.Optimizer, learning_rate: float) -> None:
     Update the learning rate for a given optimizer.
     Useful when doing linear schedule.
 
-    :param optimizer: Pytorch optimizer
+    :param optimizer: MindSpore optimizer
     :param learning_rate: New learning rate value
     """
-    for param_group in optimizer.param_groups:
-        param_group["lr"] = learning_rate
+    ops.assign(optimizer.learning_rate, ms.Tensor(learning_rate, ms.float32))
 
 
 def get_schedule_fn(value_schedule: Union[Schedule, float, int]) -> Schedule:
@@ -496,12 +495,4 @@ def get_system_info(print_info: bool = True) -> Tuple[Dict[str, str], str]:
     return env_info, env_info_str
 
 
-def torch_allclose(input: ms.Tensor, other: ms.Tensor, rtol: float = 1e-05, atol: float = 1e-08,
-                   equal_nan: bool = False) -> bool:
-    if equal_nan and ops.isnan(input) and ops.isnan(other):
-        return True
 
-    if ops.abs(input - other) - atol - rtol * ops.abs(other) <= 0:
-        return True
-    else:
-        return False

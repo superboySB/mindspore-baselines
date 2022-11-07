@@ -2,7 +2,7 @@ import pytest
 import torch as th
 
 from mindspore_baselines import A2C, DQN, PPO, SAC, TD3
-from mindspore_baselines.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
+from mindspore_baselines.common.sb3_compat.func_tf_like import RMSpropTFLike
 
 
 @pytest.mark.parametrize(
