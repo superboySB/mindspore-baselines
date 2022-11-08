@@ -7,11 +7,12 @@ MindSpore version of [Stable Baselines3](https://github.com/DLR-RM/stable-baseli
 - MindSpore == 1.9.0
 - 笔记本电脑
 ### Installation
-1. Clone repo
+1. **Clone repo**
+    
     ```bash
     git clone https://github.com/superboySB/mindspore-baselines.git && cd mindspore-baselines
     ```
-
+    
 2. [Optional] Create Virtual Environment for GPU
 
    ```sh
@@ -35,29 +36,31 @@ MindSpore version of [Stable Baselines3](https://github.com/DLR-RM/stable-baseli
    pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/1.9.0/MindSpore/gpu/x86_64/cuda-11.1/mindspore_gpu-1.9.0-cp37-cp37m-linux_x86_64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com -i https://pypi.tuna.tsinghua.edu.cn/simple
    ```
    
-3. Install minimal dependent packages
+3. **Install minimal dependent packages**
+    
     ```shell
     pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/1.9.0/MindSpore/cpu/x86_64/mindspore-1.9.0-cp37-cp37m-linux_x86_64.whl --trusted-host ms-release.obs.cn-north-4.myhuaweicloud.com -i https://pypi.tuna.tsinghua.edu.cn/simple
     pip install -e .[docs,tests,extra]
     ```
     
-4. All unit tests in mindspore-baselines3 can be run using `pytest` runner:
+4. [Optional] All unit tests in mindspore-baselines3 can be run using `pytest` runner:
 
     ```
     make pytest
     ```
 
 5. [Optional] If you want to install all of RL environments in [rl-baselines3-zoo](https://github.com/DLR-RM/rl-baselines3-zoo), run:
+    
     ```sh
-    # 安装mujuco
+    # mujuco
     sudo apt install libosmesa6-dev libgl1-mesa-glx libglfw3
     wget https://mujoco.org/download/mujoco210-linux-x86_64.tar.gz
     mkdir ~/.mujoco
     tar -zxvf mujoco210-linux-x86_64.tar.gz -C ~/.mujoco
     cd ~/.mujoco/mujoco210/bin && ./simulate
-    pip install -U 'mujoco-py<2.2,>=2.1'
+	pip install -U 'mujoco-py<2.2,>=2.1'
 	
-	# 安装其他
+	# Others
 	pip install -e .[develop]
 	```
 
