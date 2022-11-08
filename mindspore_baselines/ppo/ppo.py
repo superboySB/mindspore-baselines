@@ -277,7 +277,7 @@ class PPO(OnPolicyAlgorithm):
                     break
 
                 # Optimization step
-                # grads = ops.clip_by_global_norm(grads, clip_norm=self.max_grad_norm)  # Clip grad norm
+                grads = ops.clip_by_global_norm(grads, clip_norm=self.max_grad_norm)  # Clip grad norm
                 self.policy.optimizer(grads)
 
             if not continue_training:

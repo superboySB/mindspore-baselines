@@ -1,6 +1,6 @@
 # mindspore-baselines
 
-MindSpore version of [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3) (SB3), for supporting reinforcement learning research
+MindSpore version of [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3) (SB3-688), for supporting reinforcement learning research
 
 ## :wrench: Dependencies
 - Python == 3.7 (Recommend to use [Anaconda](https://www.anaconda.com/download/#linux) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html))
@@ -70,7 +70,7 @@ Here is a quick example of how to train and run PPO on a cartpole environment:
 ```python
 import gym
 import mindspore as ms
-from mindspore_baselines3 import PPO
+from mindspore_baselines import PPO
 
 ms.set_context(mode=ms.PYNATIVE_MODE, device_target="CPU", device_id=0)
 
